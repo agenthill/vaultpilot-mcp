@@ -8,7 +8,7 @@ Self-custodial DeFi for AI agents. The agent proposes, you approve on your Ledge
 
 ![VaultPilot MCP demo](./demo.gif)
 
-Read on-chain positions and prepare transactions across **Ethereum, Arbitrum, Polygon, Base, Optimism, TRON, Solana, Bitcoin, and Litecoin**. Supported protocols: **Aave V3, Compound V3, Morpho Blue, Uniswap V3 LP, Lido, EigenLayer** on EVM, **MarginFi** on Solana, plus **LiFi** (EVM swap/bridge) and **Jupiter v6** (Solana swap), with **1inch** as an optional EVM quote cross-check. EVM signs over WalletConnect → Ledger Live; TRON and Solana sign over USB HID directly to the device (Ledger Live's WalletConnect bridge does not support either namespace today). Works with Claude Desktop, Claude Code, Cursor, and any MCP-compatible client.
+Read on-chain positions and prepare transactions across **Ethereum, Arbitrum, Polygon, Base, Optimism, TRON, Solana, Bitcoin, and Litecoin**. Supported protocols: **Aave V3, Compound V3, Morpho Blue, Uniswap V3 LP, Lido, EigenLayer** on EVM, **MarginFi** on Solana, plus **LiFi** (EVM swap/bridge) and **Jupiter v6** (Solana swap), with **1inch** as an optional EVM quote cross-check. EVM signs over WalletConnect → Ledger Live; TRON and Solana sign over USB HID directly to the device (Ledger Live's WalletConnect bridge does not support either namespace today). Works with **Claude Code** (CLI/terminal), **Cursor**, and any MCP-compatible client over stdio. **Claude.ai chat (web + native desktop app) needs a hosted MCP endpoint** — [on the roadmap](./ROADMAP.md#deployment-modes), not yet shipped.
 
 > Agents: read **[AGENTS.md](./AGENTS.md)**. One-line prompt to paste into Claude Code / Cursor / any MCP-capable agent:
 > ```
@@ -163,9 +163,11 @@ claude mcp add vaultpilot-mcp --env VAULTPILOT_DEMO=true -- npx -y vaultpilot-mc
 
 For Solana RPC throttling under multi-tool fan-out, inject a [Helius](https://helius.dev) key at runtime: `set_helius_api_key({ key })`. Demo mode nudges proactively after 10 public-RPC throttle errors.
 
-## Use with Claude Desktop / Claude Code / Cursor
+## Use with Claude Code (CLI) / Cursor / Claude Desktop
 
 `vaultpilot-mcp setup` detects installed clients and registers vaultpilot-mcp with each (existing configs backed up to `<file>.vaultpilot.bak`). Per-project / per-workspace configs are skipped — the wizard runs from arbitrary CWD. For manual wiring or the per-client config paths, see [INSTALL.md §5](./INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run).
+
+> **Claude.ai chat — limitation.** Local stdio MCP installed via the wizard registers cleanly with the Claude.ai native desktop app, but the host environment's outbound-HTTP allowlist blocks chain RPC providers (PublicNode, public Solana mainnet, Alchemy, Helius, etc.). The MCP initializes and processes tool calls, but every read that hits an external RPC fails with 403 / "Host not in allowlist". The same applies to Claude Code running inside Claude.ai's cloud sandbox. **Working today**: Claude Code CLI in your terminal, Cursor, Claude Desktop on a host with unrestricted outbound HTTP. **Future**: a hosted MCP endpoint ([roadmap](./ROADMAP.md#deployment-modes), not yet shipped) will give Claude.ai chat a network-unrestricted backend; TRON / Solana / Bitcoin / Litecoin USB-HID signing requires a local Ledger and stays on the terminal CLI / Cursor path regardless.
 
 ## Environment variables
 

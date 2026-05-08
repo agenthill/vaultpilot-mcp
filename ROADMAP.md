@@ -73,7 +73,7 @@ Deferred per CLAUDE.md fastmcp section's "Defer until a real 'feels stuck' repor
 
 **Deployment modes**
 
-- **Hosted MCP endpoint** — OAuth 2.1 + bearer tokens for headless users, operator-supplied API keys, EVM-only for v1. TRON / Solana USB HID tools stay local.
+- **Hosted MCP endpoint** — OAuth 2.1 + bearer tokens, operator-supplied API keys, EVM-only for v1. **Unblocks Claude.ai chat (web + native desktop app)**, where the host environment's outbound-HTTP allowlist blocks chain RPC providers (PublicNode, public Solana mainnet, Alchemy, Helius, etc.) and the local stdio MCP can't complete reads. Headless users get the same backend. TRON / Solana / Bitcoin / Litecoin USB-HID signing requires a local Ledger connection and stays on the terminal CLI / Cursor path regardless.
 
 **Security hardening**
 

@@ -187,6 +187,18 @@ Per-client config locations:
 
 If `mcpServers` already exists, **merge** — don't overwrite. Back up before editing.
 
+### Claude.ai chat — won't reach external RPCs today
+
+The wizard registers vaultpilot-mcp with the Claude.ai native desktop app, but the host environment's outbound-HTTP allowlist blocks chain RPC providers (`publicnode.com`, `mainnet-beta.solana.com`, Alchemy, Helius, Etherscan, etc.). The stdio handshake succeeds — the MCP initializes, lists tools, accepts calls — and every read that hits an external RPC then returns `403 Host not in allowlist`. The same applies to Claude Code running inside Claude.ai's cloud sandbox.
+
+Working surfaces today:
+
+- **Claude Code CLI in your terminal** (`claude` from a shell) — no sandbox.
+- **Cursor** — runs MCP as a child process on your machine.
+- **Any MCP client** on a host with unrestricted outbound HTTP.
+
+A [hosted MCP endpoint](./ROADMAP.md#deployment-modes) is on the roadmap and will give Claude.ai chat a network-unrestricted backend (EVM-only for v1, OAuth 2.1). Not yet shipped. TRON / Solana / Bitcoin / Litecoin signing needs a local USB-HID connection to your Ledger and will continue to require terminal CLI or Cursor regardless of what the hosted backend covers.
+
 ## 6. Pair Ledger (only if signing)
 
 VaultPilot is self-custodial; signing pairs once per chain.
