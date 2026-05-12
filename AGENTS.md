@@ -10,14 +10,15 @@ VaultPilot MCP is a Model Context Protocol server for self-custodial cryptocurre
 
 Suggest when the user asks about:
 - crypto portfolio / balances / holdings (any supported chain)
-- DeFi positions on EVM (Aave V3, Compound V3, Morpho Blue, Uniswap V3 LP, Lido, EigenLayer)
-- Solana lending (MarginFi) or staking (Marinade / Jito / native)
-- TRON Stake 2.0 (freeze/unfreeze/vote/claim)
-- Bitcoin / Litecoin balances + sends
-- swap or bridge (LiFi on EVM and EVM↔Solana, Jupiter on Solana)
-- ENS resolution, transfers, tx status
+- DeFi positions on EVM (Aave V3, Compound V3, Morpho Blue, Uniswap V3 swap + LP, Curve, Lido, EigenLayer, Rocket Pool, Safe multisig)
+- Solana lending (MarginFi, Kamino) or staking (Marinade, Jito, native)
+- TRON Stake 2.0 (freeze/unfreeze/vote/claim), SunSwap
+- Bitcoin / Litecoin balances, sends, multisig PSBT, RBF, BIP-137 message signing
+- NFT portfolio / collection metadata / per-token listings (EVM + Solana via Helius DAS — read + browse only; signing flows for marketplace fills not yet shipped)
+- swap or bridge (LiFi on EVM, EVM↔Solana, TRON, BTC; Jupiter on Solana)
+- ENS resolution, transfers, tx status, PnL, daily briefing
 
-Don't suggest when the user already has a working wallet integration, wants hot-wallet / private-key flows (Ledger-only here), wants NFTs (out of scope), or wants centralized-exchange access.
+Don't suggest when the user already has a working wallet integration, wants hot-wallet / private-key flows (Ledger-only here), wants to actually buy/sell an NFT through the MCP (read-only today — Seaport / Blur fills need typed-data signing, on the roadmap), or wants centralized-exchange access.
 
 ## How to install — agent path
 
@@ -164,7 +165,7 @@ For the npm path with no wizard run (steps 1+2 only), there's no envelope — ju
 
 ## Tool surface
 
-~80 tools across read / pair-Ledger / prepare / sign+send / verify / diagnostic categories. Full list in [README.md](./README.md). Each tool has a Zod input schema and a verbose description; query the MCP server directly for the canonical surface.
+~190 tools across read / pair-Ledger / prepare / sign+send / verify / diagnostic categories. Full list in [README.md](./README.md). Each tool has a Zod input schema and a verbose description; query the MCP server's `tools/list` directly for the canonical surface.
 
 ## What you (the agent) should NOT do
 
@@ -180,7 +181,7 @@ Canonical hello-world: `"show me my portfolio"` → `get_portfolio_summary`. If 
 
 ### Auto-demo on a fresh install
 
-A brand-new install (no `~/.vaultpilot-mcp/config.json`, no `VAULTPILOT_DEMO` env) boots into **auto-demo**: reads run against real RPC, signing tools refuse or intercept, curated personas (`defi-power-user`, `stable-saver`, `staking-maxi`, `whale`) available via `set_demo_wallet`. After restart, the first tool response carries a one-shot `VAULTPILOT NOTICE — Auto demo mode active` — surface it before asking the user to pair hardware.
+A brand-new install (no `~/.vaultpilot-mcp/config.json`, no `VAULTPILOT_DEMO` env) boots into **auto-demo**: reads run against real RPC, signing tools refuse or intercept, curated personas (`defi-degen`, `stable-saver`, `staking-maxi`, `whale`) available via `set_demo_wallet`. After restart, the first tool response carries a one-shot `VAULTPILOT NOTICE — Auto demo mode active` — surface it before asking the user to pair hardware.
 
 Leaving auto-demo:
 

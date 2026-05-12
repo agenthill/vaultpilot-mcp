@@ -8,7 +8,7 @@ Self-custodial DeFi for AI agents. The agent proposes, you approve on your Ledge
 
 ![VaultPilot MCP demo](./demo.gif)
 
-Read on-chain positions and prepare transactions across **Ethereum, Arbitrum, Polygon, Base, Optimism, TRON, Solana, Bitcoin, and Litecoin**. Supported protocols: **Aave V3, Compound V3, Morpho Blue, Uniswap V3 LP, Lido, EigenLayer** on EVM, **MarginFi** on Solana, plus **LiFi** (EVM swap/bridge) and **Jupiter v6** (Solana swap), with **1inch** as an optional EVM quote cross-check. EVM signs over WalletConnect → Ledger Live; TRON and Solana sign over USB HID directly to the device (Ledger Live's WalletConnect bridge does not support either namespace today). Works with **Claude Code** (CLI/terminal), **Cursor**, and any MCP-compatible client over stdio. **Claude.ai chat (web + native desktop app) needs a hosted MCP endpoint** — [on the roadmap](./ROADMAP.md#deployment-modes), not yet shipped.
+Read on-chain positions and prepare transactions across **Ethereum, Arbitrum, Polygon, Base, Optimism, TRON, Solana, Bitcoin, and Litecoin**. Supported protocols: **Aave V3, Compound V3, Morpho Blue, Uniswap V3 (swap + LP verbs), Curve, Lido, EigenLayer, Rocket Pool, Safe (Gnosis) multisig** on EVM, **MarginFi, Kamino, Marinade, Jito** on Solana, **SunSwap** on TRON, plus **LiFi** (EVM + EVM↔Solana + TRON + BTC swap/bridge) and **Jupiter v6** (Solana swap), with **1inch** as an optional EVM quote cross-check. EVM signs over WalletConnect → Ledger Live; TRON, Solana, Bitcoin and Litecoin sign over USB HID directly to the device (Ledger Live's WalletConnect bridge does not support those namespaces today). Works with **Claude Code** (CLI/terminal), **Cursor**, and any MCP-compatible client over stdio. **Claude.ai chat (web + native desktop app) needs a hosted MCP endpoint** — [on the roadmap](./ROADMAP.md#deployment-modes), not yet shipped.
 
 > Agents: read **[AGENTS.md](./AGENTS.md)**. One-line prompt to paste into Claude Code / Cursor / any MCP-capable agent:
 > ```
@@ -17,13 +17,15 @@ Read on-chain positions and prepare transactions across **Ethereum, Arbitrum, Po
 
 ## Features
 
-- **Portfolio** — cross-chain balances, DeFi position aggregation, USD totals
-- **Positions** — Aave, Compound, Morpho, Uniswap V3 LP, MarginFi; health-factor alerts
-- **Staking** — Lido + EigenLayer (EVM); TRON Stake 2.0; Solana (Marinade / Jito / native)
-- **Swaps** — LiFi (EVM + EVM↔Solana, optional 1inch cross-check), Jupiter v6 (Solana)
-- **Execution** — prepare/sign for every supported protocol + native/token sends. Solana sends use a per-wallet durable-nonce account so Ledger review doesn't race the ~60s blockhash window; every Solana prepare runs a `simulateTransaction` gate so program-level reverts fail at prepare time, not on broadcast.
-- **Security** — contract verification, upgradeability checks, privileged-role enumeration, DefiLlama-backed risk score
-- **Utilities** — ENS resolution, token balances, transaction status
+- **Portfolio** — cross-chain balances, DeFi position aggregation, USD totals, NFT collections (EVM + Solana via Helius DAS), wallet-level PnL (`mtd` / `ytd` / `30d` / `7d` / `1d`), daily briefing
+- **Positions** — Aave, Compound, Morpho, Uniswap V3 LP, Curve, MarginFi, Kamino, Safe (Gnosis) multisig; multi-protocol health-factor alerts; liquidation-risk simulation
+- **Staking** — Lido (stake / unstake / stETH↔wstETH wrap) + EigenLayer + Rocket Pool (EVM); TRON Stake 2.0 (freeze / unfreeze / vote / claim); Solana (Marinade, Jito, native delegate/deactivate/withdraw)
+- **Swaps + bridges** — LiFi (EVM + EVM↔Solana + TRON + BTC routes, optional 1inch cross-check), Jupiter v6 (Solana), direct Uniswap V3, Curve, SunSwap (TRON)
+- **Execution** — prepare/sign for every supported protocol + native/token sends, ERC-20 approvals + revoke, WETH wrap/unwrap, `prepare_custom_call` escape hatch for arbitrary verified-contract calls. Solana sends use a per-wallet durable-nonce account so Ledger review doesn't race the ~60s blockhash window; every Solana prepare runs a `simulateTransaction` gate so program-level reverts fail at prepare time, not on broadcast.
+- **Bitcoin + Litecoin** — native segwit + taproot sends, BIP-125 RBF fee-bumps, PSBT multisig (combine / sign / finalize), BIP-137 message signing, mempool.space fee estimation, optional Bitcoin Core / Litecoin Core RPC for forensic chain reads (forks, mempool census, fee percentiles)
+- **Security** — contract verification, upgradeability checks, privileged-role enumeration, DefiLlama-backed risk score, on-device Ledger attestation + firmware version pin, `verify_tx_decode` for second-LLM bytes-vs-intent cross-check, signed on-disk contacts/address-book
+- **Utilities** — ENS resolution, symbol→contract `resolve_token` registry, token balances, allowance enumeration, tx status, `explain_tx` post-hoc decode, `compare_yields` across lending + LST adapters
+- **Demo mode** — curated personas (`whale` / `defi-degen` / `stable-saver` / `staking-maxi`) for first contact with no RPC keys / Ledger / config file
 
 ## Security model
 
@@ -59,13 +61,15 @@ Restart, then type `/setup`.
 
 ## Supported chains
 
-**EVM** — Ethereum, Arbitrum, Polygon, Base. Lido reads on Ethereum + Arbitrum, Lido writes Ethereum-only. EigenLayer + Morpho Blue Ethereum-only.
+**EVM** — Ethereum, Arbitrum, Polygon, Base, Optimism. Lido reads on Ethereum + Arbitrum, Lido writes Ethereum-only. EigenLayer + Morpho Blue + Rocket Pool Ethereum-only. Compound V3 + Aave V3 + Uniswap V3 + LiFi + Safe multisig span all five chains; per-protocol address coverage varies — readers short-circuit cleanly where a protocol isn't deployed.
 
-**TRON** — TRX + canonical TRC-20 stablecoins (USDT, USDC, USDD, TUSD); Stake 2.0 freeze/unfreeze/withdraw-expire-unfreeze + voting-reward claims. No lending/LP (Aave/Compound/Morpho/Uniswap aren't deployed). Pair once per session via `pair_ledger_tron`.
+**TRON** — TRX + canonical TRC-20 stablecoins (USDT, USDC, USDD, TUSD); Stake 2.0 freeze/unfreeze/withdraw-expire-unfreeze + voting-reward claims; SunSwap (same-chain TRX↔TRC-20 swaps); LiFi-routed TRON↔EVM bridging. No lending/LP (Aave/Compound/Morpho/Uniswap aren't deployed). Pair once per session via `pair_ledger_tron`.
 
-**Solana** — SOL + SPL balances, MarginFi lending, Marinade / Jito / native stake-account reads with SOL-equivalent valuation, Jupiter v6 quotes. Writes cover SOL/SPL transfers, MarginFi supply/withdraw/borrow/repay, Jupiter swaps, Marinade stake + immediate-unstake, native SOL delegate/deactivate/withdraw, and LiFi-routed EVM↔Solana bridging. Per-wallet durable-nonce account (~0.00144 SOL rent, reclaimable) protects sends from blockhash expiry during Ledger review (`prepare_solana_nonce_init` / `_close`). SPL / MarginFi / Jupiter blind-sign against a Message Hash — enable **Allow blind signing** in the Solana app's Settings; SOL native transfers clear-sign. Pair once per session via `pair_ledger_solana`.
+**Solana** — SOL + SPL balances, MarginFi + Kamino lending, Marinade / Jito / native stake-account reads with SOL-equivalent valuation, Jupiter v6 quotes, Helius DAS NFT portfolio. Writes cover SOL/SPL transfers, MarginFi + Kamino supply/withdraw/borrow/repay, Jupiter swaps, Marinade stake + immediate-unstake, Jito stake-pool deposit, native SOL delegate/deactivate/withdraw, and LiFi-routed EVM↔Solana bridging. Per-wallet durable-nonce account (~0.00144 SOL rent, reclaimable) protects sends from blockhash expiry during Ledger review (`prepare_solana_nonce_init` / `_close`). SPL / MarginFi / Kamino / Jupiter / Jito blind-sign against a Message Hash — enable **Allow blind signing** in the Solana app's Settings; SOL native transfers clear-sign. Pair once per session via `pair_ledger_solana`.
 
-Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verified 2026-04-14) or expose Solana accounts (verified 2026-04-23), which is why both paths use USB HID. Readers short-circuit cleanly on chains where a protocol isn't deployed.
+**Bitcoin + Litecoin** — balance, UTXO, fee-estimate, and tx-history readers via Esplora (mempool.space / litecoinspace.org). Native segwit + taproot sends, BIP-125 RBF fee-bumps, multisig PSBT (combine / sign / finalize), BIP-137 message signing, LiFi-routed BTC→EVM/Solana swaps. Optional Bitcoin Core / Litecoin Core JSON-RPC unlocks forensic tools that Esplora cannot serve (chain tips, block stats, mempool summary) — see [INSTALL.md §9](./INSTALL.md#9-troubleshooting) for setup. Pair once via `pair_ledger_btc` / `pair_ledger_ltc`.
+
+Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verified 2026-04-14) or expose Solana accounts (verified 2026-04-23) or expose BTC/LTC namespaces, which is why those paths use USB HID. Readers short-circuit cleanly on chains where a protocol isn't deployed.
 
 ## Roadmap
 
@@ -73,50 +77,83 @@ Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verifie
 
 ## Tools
 
-**Read-only:**
+~190 tools across read / pair-Ledger / prepare / sign+send / verify / diagnostic categories. Highlights below; each tool has a Zod input schema and verbose description — query the MCP server's `tools/list` for the canonical surface.
 
-- `get_portfolio_summary` — cross-chain USD totals; optional `tronAddress` / `solanaAddress` fold those chains in
-- `get_lending_positions`, `get_compound_positions`, `get_morpho_positions`, `get_marginfi_positions` — per-protocol positions + health factors
-- `get_compound_market_info` — wallet-less Comet snapshot: base-token metadata, supply/borrow/utilization/APR, pause flags, collateral list with caps + LTV factors
-- `get_market_incident_status` — paused / frozen / utilization ≥ 95% scan across Compound or Aave on a chain; surfaces a top-level `incident` bit
-- `get_marginfi_diagnostics` — banks the bundled SDK had to skip, with root cause
+**Portfolio + positions (read-only):**
+
+- `get_portfolio_summary`, `get_portfolio_diff`, `get_pnl_summary`, `get_daily_briefing` — cross-chain USD aggregation; optional `tronAddress` / `solanaAddress` fold those chains in
+- `get_lending_positions` (Aave), `get_compound_positions`, `get_morpho_positions`, `get_marginfi_positions`, `get_kamino_positions`, `get_curve_positions`, `get_safe_positions` — per-protocol positions + health factors
 - `get_lp_positions` — Uniswap V3 LP + IL estimate
-- `get_staking_positions`, `get_staking_rewards`, `estimate_staking_yield` — Lido + EigenLayer
+- `get_staking_positions`, `get_staking_rewards`, `estimate_staking_yield` — Lido + EigenLayer + Rocket Pool
 - `get_solana_staking_positions` — Marinade + Jito + native stake-account enumeration with activation status and SOL-equivalent valuation
-- `get_health_alerts`, `simulate_position_change` — liquidation-risk tooling
-- `simulate_transaction` — EVM `eth_call` preview (Solana equivalent runs inside `preview_solana_send`)
-- `get_token_balance`, `get_token_price`, `get_token_metadata` — balances + DefiLlama prices on EVM/TRON/Solana; `get_token_metadata` detects EIP-1967 proxies
+- `get_tron_staking`, `list_tron_witnesses` — TRON Stake 2.0 state + SR list
+- `get_nft_portfolio` (EVM + Solana DAS), `get_nft_collection`, `get_nft_history`, `get_nft_listings` (EVM)
+- `get_btc_balance` / `_balances` / `_account_balance` / `_multisig_balance` / `_multisig_utxos` / `_tx_history` / `_fee_estimates`, `get_ltc_balance` — BTC + LTC reads via Esplora
+- `get_compound_market_info` — wallet-less Comet snapshot
+- `get_health_alerts`, `simulate_position_change` — multi-protocol liquidation-risk tooling
+- `compare_yields` — rank lending APRs across Aave / Compound / Morpho / Marinade / Jito / Kamino-lend / MarginFi
+- `get_marginfi_diagnostics` — banks the bundled SDK skipped, with root cause
+
+**Tokens, prices, history:**
+
+- `get_token_balance`, `get_token_price`, `get_token_metadata`, `get_token_allowances`, `get_coin_price` — balances + DefiLlama prices on EVM/TRON/Solana; `get_token_metadata` detects EIP-1967 proxies
 - `get_transaction_history` — merged tx reader (external / ERC-20 / internal / Solana program_interaction) with 4byte-decoded methods + historical USD
-- `get_tron_staking`, `list_tron_witnesses` — TRON staking state + SR list
+- `get_transaction_status` — poll inclusion by hash
+- `explain_tx` — post-hoc decode of a historical tx
+- `resolve_token`, `resolve_ens_name`, `reverse_resolve_ens`
+
+**Forensic chain reads (require Bitcoin/Litecoin Core RPC):**
+
+- `get_btc_block_tip` / `_block_stats` / `_blocks_recent` / `_chain_tips` / `_mempool_summary`, `get_ltc_*` equivalents
+- `build_incident_report`, `get_market_incident_status` — Compound/Aave pause + utilization scan and BTC/LTC chain-tip / mempool-anomaly bundle
+
+**Quotes + security signals:**
+
+- `get_swap_quote` (LiFi, EVM), `get_solana_swap_quote` (Jupiter v6)
+- `check_contract_security`, `check_permission_risks`, `get_protocol_risk_score`, `get_contract_abi`, `read_contract`
+- `simulate_transaction` — EVM `eth_call` preview (Solana equivalent runs inside `preview_solana_send`)
+- `verify_tx_decode`, `get_verification_artifact`, `get_tx_verification` — second-LLM cross-verification + 15-min-TTL handle re-emit ([details](./SECURITY.md#second-agent-verification-optional-for-the-coordinated-agent-case))
+
+**Diagnostics:**
+
 - `get_solana_setup_status` — probe nonce + MarginFi account PDAs
 - `get_vaultpilot_config_status` — local config diagnostic (RPC sources, key presence, paired-account counts, WC topic suffix, skill state). Booleans / counts only — no secret values.
-- `get_ledger_device_info` — probe the connected Ledger and report which app is open + actionable hint. Call before `pair_ledger_*` for state-aware guidance.
-- `resolve_ens_name`, `reverse_resolve_ens` — ENS forward/reverse
-- `get_swap_quote` (LiFi, EVM), `get_solana_swap_quote` (Jupiter v6)
-- `check_contract_security`, `check_permission_risks`, `get_protocol_risk_score`
-- `get_transaction_status` — poll inclusion by hash
-- `get_tx_verification` — re-emit VERIFY-BEFORE-SIGNING + tx JSON for a handle when the original prepare_* output dropped out of context (15-min TTL)
-- `get_verification_artifact` — sparse JSON for second-LLM cross-verification ([details](./SECURITY.md#second-agent-verification-optional-for-the-coordinated-agent-case))
+- `get_ledger_device_info`, `get_ledger_status`, `verify_ledger_attestation` / `_firmware` / `_live_codesign` — device + session discovery, on-device attestation, firmware-version pin
+
+**Contacts + read-only sharing:**
+
+- `add_contact` / `remove_contact` / `list_contacts` / `verify_contacts` — local Ledger-signed address book at `~/.vaultpilot-mcp/contacts.json`
+- `generate_readonly_link` / `import_readonly_token` / `list_readonly_invites` / `revoke_readonly_invite` — issue scoped read-only portfolio links
+- `share_strategy` / `import_strategy` — anonymized portfolio snapshots
 
 **Execution (Ledger-signed):**
 
-- `pair_ledger_live` (EVM/WC), `pair_ledger_tron` / `_solana` (USB HID), `get_ledger_status` — session + account discovery
-- `prepare_aave_*`, `prepare_compound_*`, `prepare_morpho_*` — EVM lending
-- `prepare_lido_stake` / `_unstake`, `prepare_eigenlayer_deposit` — EVM staking
-- `prepare_swap` (LiFi), `prepare_native_send`, `prepare_token_send` — EVM
-- `prepare_uniswap_swap` — direct V3 swap, same-chain only, auto-picks fee tier across 100/500/3000/10000 bps. Use only when the user names Uniswap; otherwise prefer LiFi.
-- `prepare_tron_*` — native + TRC-20 transfers, WithdrawBalance, Stake 2.0, vote
+- `pair_ledger_live` (EVM/WC), `pair_ledger_tron` / `_solana` / `_btc` / `_ltc` (USB HID)
+- `prepare_aave_*`, `prepare_compound_*`, `prepare_morpho_*` — EVM lending (supply / borrow / withdraw / repay)
+- `prepare_lido_stake` / `_unstake` / `_wrap` / `_unwrap` (stETH↔wstETH), `prepare_eigenlayer_deposit`, `prepare_rocketpool_stake` / `_unstake`
+- `prepare_swap` (LiFi), `prepare_native_send`, `prepare_token_send`, `prepare_token_approve`, `prepare_revoke_approval`, `prepare_weth_unwrap`
+- `prepare_uniswap_swap` — direct V3 swap, same-chain, auto-picks fee tier across 100/500/3000/10000 bps. Use only when the user names Uniswap; otherwise prefer LiFi
+- `prepare_uniswap_v3_mint` / `_increase_liquidity` / `_decrease_liquidity` / `_collect` / `_burn` / `_rebalance` — full LP verb set
+- `prepare_curve_swap`, `prepare_curve_add_liquidity`
+- `prepare_safe_tx_propose` / `_approve` / `_execute`, `submit_safe_tx_signature` — Safe multisig proposal flow
+- `prepare_custom_call` — escape hatch for arbitrary verified-contract calls (`acknowledgeNonProtocolTarget: true` gate; bypasses the canonical-dispatch allowlist by design)
+- `prepare_tron_*` — native + TRC-20 transfers, WithdrawBalance, Stake 2.0, vote, claim rewards, TRC-20 approve, LiFi swap, SunSwap swap (`prepare_sunswap_swap`)
 - `prepare_solana_nonce_init` / `_close` — one-time durable-nonce PDA setup/teardown
-- `prepare_solana_native_send`, `_spl_send` (auto-includes ATA create), `prepare_solana_swap` (Jupiter)
+- `prepare_solana_native_send`, `_spl_send` (auto-includes ATA create), `prepare_solana_swap` (Jupiter), `prepare_solana_lifi_swap`
 - `prepare_marginfi_init`, `_supply`, `_withdraw`, `_borrow`, `_repay`
-- `prepare_marinade_stake` / `_unstake_immediate` (fee applies; unstake-ticket delayed path deferred)
+- `prepare_kamino_init_user`, `_supply`, `_withdraw`, `_borrow`, `_repay`
+- `prepare_marinade_stake` / `_unstake_immediate` (fee applies; unstake-ticket delayed path deferred), `prepare_jito_stake` (stake only — unstake deferred), `list_solana_validators`
 - `prepare_native_stake_delegate` / `_deactivate` / `_withdraw` — native SOL staking
-- `preview_solana_send` — pins nonce/blockhash, computes Message Hash for on-device match, runs simulation, emits `CHECKS PERFORMED`. Required between every `prepare_solana_*` and `send_transaction`.
-- `send_transaction` — forwards to Ledger (EVM via WC, TRON/Solana via USB HID)
+- `prepare_btc_send`, `prepare_btc_rbf_bump`, `prepare_btc_multisig_send`, `register_btc_multisig_wallet` / `unregister_btc_multisig_wallet`, `combine_btc_psbts`, `sign_btc_multisig_psbt`, `finalize_btc_psbt`, `sign_message_btc`, `prepare_btc_lifi_swap`, `rescan_btc_account`
+- `prepare_litecoin_native_send`, `sign_message_ltc`, `rescan_ltc_account`
+- `preview_send` (EVM) — pins gas, emits `LEDGER BLIND-SIGN HASH` for pre-match, mints `previewToken`; required between every EVM `prepare_*` and `send_transaction`
+- `preview_solana_send` — pins nonce/blockhash, computes Message Hash for on-device match, runs simulation, emits `CHECKS PERFORMED`; required between every `prepare_solana_*` and `send_transaction`
+- `send_transaction` — forwards to Ledger (EVM via WC, TRON/Solana/BTC/LTC via USB HID)
 
 **Meta:**
 
-- `request_capability` — file a missing-feature GitHub issue. Default returns a pre-filled URL (no auto-submit); rate-limited 3/hour.
+- `request_capability` — file a missing-feature GitHub issue. Default returns a pre-filled URL (no auto-submit); rate-limited 3/hour
+- `set_etherscan_api_key`, `set_helius_api_key`, `set_demo_wallet`, `exit_demo_mode`, `get_demo_wallet`, `get_update_command` — runtime knobs
 
 ## Requirements
 
