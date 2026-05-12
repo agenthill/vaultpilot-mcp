@@ -130,6 +130,26 @@ describe("assertCanonicalLedgerApp — refuse", () => {
     ).toThrow(/below the minimum supported version 0\.7\.0/);
   });
 
+  it("refuses a Solana version below minVersion", () => {
+    expect(() =>
+      assertCanonicalLedgerApp({
+        reportedName: "Solana",
+        reportedVersion: "0.9.9",
+        expectedNames: ["Solana"],
+      }),
+    ).toThrow(/below the minimum supported version 1\.10\.0/);
+  });
+
+  it("refuses a Litecoin version below minVersion", () => {
+    expect(() =>
+      assertCanonicalLedgerApp({
+        reportedName: "Litecoin",
+        reportedVersion: "2.3.0",
+        expectedNames: ["Litecoin"],
+      }),
+    ).toThrow(/below the minimum supported version 2\.4\.0/);
+  });
+
   it("refuses a malformed name with no canonical mapping", () => {
     expect(() =>
       assertCanonicalLedgerApp({
