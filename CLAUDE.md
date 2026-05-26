@@ -1,5 +1,8 @@
 > **Generic process rules live in `~/.claude/CLAUDE.md`** (auto-loaded by Claude Code from the private [claude-md-global](https://github.com/szhygulin/claude-md-global) repo). The rules below are project-specific or override global defaults.
 
+## Chat Output — WalletConnect Pairing
+- Don't print the ASCII QR block from `pair_ledger_live` into chat. Surface the `wc:` URI only — Ledger Live accepts a pasted URI, and the QR floods terminal scrollback.
+
 ## Crypto/DeFi Transaction Preflight Checks
 - Before preparing any on-chain tx, verify: native gas/bandwidth (TRX bandwidth on TRON), lending pause flags (`isWithdrawPaused` / `isSupplyPaused`), min borrow/supply thresholds, ERC-20 approval status.
 - Never use `uint256.max` for collateral withdrawal — fetch the exact balance.
