@@ -166,12 +166,10 @@ function formatProtocolLabel(protocol: string, chain: string): string {
 function formatUsd(n: number): string {
   if (!Number.isFinite(n)) return "$?";
   const abs = Math.abs(n);
-  let body: string;
-  if (abs >= 1_000_000) body = `$${(n / 1_000_000).toFixed(2)}M`;
-  else if (abs >= 1_000) body = `$${(n / 1_000).toFixed(2)}K`;
-  else if (abs >= 1) body = `$${n.toFixed(2)}`;
-  else body = `$${n.toFixed(4)}`;
-  return body;
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `$${(n / 1_000).toFixed(2)}K`;
+  if (abs >= 1) return `$${n.toFixed(2)}`;
+  return `$${n.toFixed(4)}`;
 }
 
 function formatNotes(notes: string[]): string[] {

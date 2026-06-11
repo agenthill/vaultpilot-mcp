@@ -34,10 +34,7 @@ import type {
   PortfolioSummary,
   MultiWalletPortfolioSummary,
 } from "../../types/index.js";
-import type {
-  AssetDiffRow,
-  PortfolioDiffSummary,
-} from "../diff/schemas.js";
+import type { PortfolioDiffSummary } from "../diff/schemas.js";
 import type {
   HistoryItem,
   HistoryResponse,
@@ -97,12 +94,7 @@ export async function getDailyBriefing(
       diffResult?.windowStartIso ?? synthesizeWindowStartIso(period),
     windowEndIso:
       diffResult?.windowEndIso ?? new Date().toISOString(),
-    addresses: {
-      ...(args.wallet ? { wallet: args.wallet } : {}),
-      ...(args.tronAddress ? { tronAddress: args.tronAddress } : {}),
-      ...(args.solanaAddress ? { solanaAddress: args.solanaAddress } : {}),
-      ...(args.bitcoinAddress ? { bitcoinAddress: args.bitcoinAddress } : {}),
-    },
+    addresses: pickAddresses(args),
     totals,
     topMovers,
     healthAlerts,
@@ -153,21 +145,8 @@ async function readPortfolioSummary(
   args: GetDailyBriefingArgs,
   notes: string[],
 ): Promise<PortfolioSummary | MultiWalletPortfolioSummary | null> {
-  if (
-    !args.wallet &&
-    !args.tronAddress &&
-    !args.solanaAddress &&
-    !args.bitcoinAddress
-  ) {
-    return null;
-  }
   try {
-    return await getPortfolioSummary({
-      ...(args.wallet ? { wallet: args.wallet } : {}),
-      ...(args.tronAddress ? { tronAddress: args.tronAddress } : {}),
-      ...(args.solanaAddress ? { solanaAddress: args.solanaAddress } : {}),
-      ...(args.bitcoinAddress ? { bitcoinAddress: args.bitcoinAddress } : {}),
-    });
+    return await getPortfolioSummary(pickAddresses(args));
   } catch (e) {
     notes.push(
       `Portfolio total read failed: ${(e as Error).message ?? "unknown"}`,
@@ -183,10 +162,7 @@ async function readPortfolioDiff(
 ): Promise<PortfolioDiffSummary | null> {
   try {
     return await getPortfolioDiff({
-      ...(args.wallet ? { wallet: args.wallet } : {}),
-      ...(args.tronAddress ? { tronAddress: args.tronAddress } : {}),
-      ...(args.solanaAddress ? { solanaAddress: args.solanaAddress } : {}),
-      ...(args.bitcoinAddress ? { bitcoinAddress: args.bitcoinAddress } : {}),
+      ...pickAddresses(args),
       window: period,
       // Keep the structured envelope so we can read `perAsset`; the
       // diff's narrative is the wrong voice for the digest's section
@@ -336,6 +312,21 @@ async function fetchHistorySafely(
 
 // ---------- composition helpers ----------
 
+/** Extracts the optional address fields from args as a compact object. */
+function pickAddresses(args: GetDailyBriefingArgs): {
+  wallet?: string;
+  tronAddress?: string;
+  solanaAddress?: string;
+  bitcoinAddress?: string;
+} {
+  return {
+    ...(args.wallet ? { wallet: args.wallet } : {}),
+    ...(args.tronAddress ? { tronAddress: args.tronAddress } : {}),
+    ...(args.solanaAddress ? { solanaAddress: args.solanaAddress } : {}),
+    ...(args.bitcoinAddress ? { bitcoinAddress: args.bitcoinAddress } : {}),
+  };
+}
+
 function computeTotals(
   summary: PortfolioSummary | MultiWalletPortfolioSummary | null,
   diff: PortfolioDiffSummary | null,
@@ -355,13 +346,7 @@ function computeTotals(
 function pickTopMovers(diff: PortfolioDiffSummary | null): TopMover[] {
   if (!diff) return [];
   // `perAsset` is per-chain; flatten + sort by |total change|.
-  const all: AssetDiffRow[] = [];
-  for (const slice of diff.perChain ?? []) {
-    for (const row of slice.perAsset) {
-      all.push(row);
-    }
-  }
-  const movers = all
+  const movers = (diff.perChain ?? []).flatMap((slice) => slice.perAsset)
     .map((row) => {
       const changeUsd = row.endingValueUsd - row.startingValueUsd;
       return {
