@@ -115,7 +115,6 @@ export function selectInputs(args: {
   }));
   const outputsForCS = args.outputs.map((o) => ({
     ...o,
-    address: o.address,
     script: { length: SEGWIT_OUTPUT_SCRIPT_LEN },
   }));
   // coinselect appends change automatically when needed by adding an
