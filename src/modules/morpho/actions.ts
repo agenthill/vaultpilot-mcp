@@ -48,16 +48,6 @@ async function resolveMarketParams(
   return { loanToken, collateralToken, oracle, irm, lltv };
 }
 
-function paramsTuple(p: MorphoMarketParams) {
-  return {
-    loanToken: p.loanToken,
-    collateralToken: p.collateralToken,
-    oracle: p.oracle,
-    irm: p.irm,
-    lltv: p.lltv,
-  };
-}
-
 export async function buildMorphoSupply(p: PrepareMorphoSupplyArgs): Promise<UnsignedTx> {
   const chain = p.chain as SupportedChain;
   const wallet = p.wallet as `0x${string}`;
@@ -87,7 +77,7 @@ export async function buildMorphoSupply(p: PrepareMorphoSupplyArgs): Promise<Uns
     data: encodeFunctionData({
       abi: morphoBlueAbi,
       functionName: "supply",
-      args: [paramsTuple(params), amountWei, 0n, wallet, "0x"],
+      args: [params, amountWei, 0n, wallet, "0x"],
     }),
     value: "0",
     from: wallet,
@@ -122,7 +112,7 @@ export async function buildMorphoWithdraw(p: PrepareMorphoWithdrawArgs): Promise
     data: encodeFunctionData({
       abi: morphoBlueAbi,
       functionName: "withdraw",
-      args: [paramsTuple(params), amountWei, 0n, wallet, wallet],
+      args: [params, amountWei, 0n, wallet, wallet],
     }),
     value: "0",
     from: wallet,
@@ -148,7 +138,7 @@ export async function buildMorphoBorrow(p: PrepareMorphoBorrowArgs): Promise<Uns
     data: encodeFunctionData({
       abi: morphoBlueAbi,
       functionName: "borrow",
-      args: [paramsTuple(params), amountWei, 0n, wallet, wallet],
+      args: [params, amountWei, 0n, wallet, wallet],
     }),
     value: "0",
     from: wallet,
@@ -180,7 +170,6 @@ export async function buildMorphoRepay(p: PrepareMorphoRepayArgs): Promise<Unsig
   let assetsArg: bigint;
   let sharesArg: bigint;
   let neededForApproval: bigint;
-  let displayAmount = p.amount;
   if (p.amount === "max") {
     const client = getClient(chain);
     const position = (await client.readContract({
@@ -214,7 +203,6 @@ export async function buildMorphoRepay(p: PrepareMorphoRepayArgs): Promise<Unsig
     neededForApproval = (approxAssets * 101n) / 100n;
     assetsArg = 0n;
     sharesArg = borrowShares;
-    displayAmount = "max";
   } else {
     const amountWei = parseUnits(p.amount, meta.decimals);
     assetsArg = amountWei;
@@ -244,7 +232,7 @@ export async function buildMorphoRepay(p: PrepareMorphoRepayArgs): Promise<Unsig
     data: encodeFunctionData({
       abi: morphoBlueAbi,
       functionName: "repay",
-      args: [paramsTuple(params), assetsArg, sharesArg, wallet, "0x"],
+      args: [params, assetsArg, sharesArg, wallet, "0x"],
     }),
     value: "0",
     from: wallet,
@@ -254,7 +242,7 @@ export async function buildMorphoRepay(p: PrepareMorphoRepayArgs): Promise<Unsig
         : `Repay ${p.amount} ${meta.symbol} to Morpho Blue market ${p.marketId} on ${chain}`,
     decoded: {
       functionName: "repay",
-      args: { marketId: p.marketId, amount: displayAmount, onBehalf: wallet },
+      args: { marketId: p.marketId, amount: p.amount, onBehalf: wallet },
     },
     durableBindings: [makeDurableBinding("morpho-blue-market-id", p.marketId)],
   };
@@ -292,7 +280,7 @@ export async function buildMorphoSupplyCollateral(
     data: encodeFunctionData({
       abi: morphoBlueAbi,
       functionName: "supplyCollateral",
-      args: [paramsTuple(params), amountWei, wallet, "0x"],
+      args: [params, amountWei, wallet, "0x"],
     }),
     value: "0",
     from: wallet,
@@ -326,7 +314,7 @@ export async function buildMorphoWithdrawCollateral(
     data: encodeFunctionData({
       abi: morphoBlueAbi,
       functionName: "withdrawCollateral",
-      args: [paramsTuple(params), amountWei, wallet, wallet],
+      args: [params, amountWei, wallet, wallet],
     }),
     value: "0",
     from: wallet,
