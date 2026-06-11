@@ -533,30 +533,20 @@ async function pushUsdtBlacklistSignal(
   // USDT — and the wallet flag persists across receipts).
   type Direction = "outgoing" | "incoming";
   const counterparties = new Map<string, Direction[]>();
-  interface Edge {
-    from: string;
-    to: string;
-    timestamp: number;
-  }
-  const edges: Edge[] = [];
-  for (const e of history.external) {
-    edges.push({ from: e.from, to: e.to, timestamp: e.timestamp });
-  }
-  for (const e of history.tokenTransfers) {
-    edges.push({ from: e.from, to: e.to, timestamp: e.timestamp });
-  }
-  edges.sort((a, b) => b.timestamp - a.timestamp);
-  const window = edges.slice(0, BLACKLIST_COUNTERPARTY_WINDOW);
-  for (const edge of window) {
-    const fromHex: string = edge.from;
-    const toHex: string = edge.to;
-    const isFromUs: boolean = fromHex === wallet;
-    const isToUs: boolean = toHex === wallet;
-    const counterparty: string | null = isFromUs
-      ? toHex
-      : isToUs
-      ? fromHex
-      : null;
+  const edges = [...history.external, ...history.tokenTransfers]
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, BLACKLIST_COUNTERPARTY_WINDOW);
+  for (const edge of edges) {
+    const isFromUs = edge.from === wallet;
+    const isToUs = edge.to === wallet;
+    let counterparty: string | null;
+    if (isFromUs) {
+      counterparty = edge.to;
+    } else if (isToUs) {
+      counterparty = edge.from;
+    } else {
+      counterparty = null;
+    }
     if (counterparty === null || counterparty === wallet) continue;
     if (!isTronAddress(counterparty)) continue;
     const direction: Direction = isFromUs ? "outgoing" : "incoming";
