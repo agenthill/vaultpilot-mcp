@@ -411,19 +411,13 @@ export async function evmPostmortem(
   if (perspective === sender.toLowerCase()) {
     const existing = balanceChanges.find((b) => b.token === "native");
     if (existing) {
-      const newDelta = (
-        BigInt(Math.round(Number(existing.delta) * 1e18)) - feeWei
-      ).toString();
-      // Re-format — but to avoid float-introduced precision drift,
-      // recompute from the raw nativeDelta + feeWei combo.
+      // Recompute from raw nativeDelta + feeWei to avoid float-precision drift.
       const combined = nativeDelta - feeWei;
       existing.delta = formatUnits(combined, 18);
       existing.deltaApprox = Number(existing.delta);
       if (nativePrice !== undefined && Number.isFinite(existing.deltaApprox)) {
         existing.valueUsd = round2(existing.deltaApprox * nativePrice);
       }
-      // Suppress the ts unused warning on `newDelta`.
-      void newDelta;
     } else {
       const combined = -feeWei;
       const formattedCombined = formatUnits(combined, 18);

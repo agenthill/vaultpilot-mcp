@@ -151,10 +151,7 @@ export async function solanaPostmortem(
   );
   const feePayer = accountKeys[0];
   const perspective = args.perspective ?? feePayer;
-  const status: "success" | "failed" = tx.meta?.err ? "success" : "success";
-  // ^ Wait — the parsed err === null when success, set when fail.
-  const realStatus: "success" | "failed" = tx.meta?.err == null ? "success" : "failed";
-  void status;
+  const status: "success" | "failed" = tx.meta?.err == null ? "success" : "failed";
 
   // Build steps from top-level instructions.
   const steps: ExplainTxStep[] = [];
@@ -293,7 +290,7 @@ export async function solanaPostmortem(
     : undefined;
 
   let summary: string;
-  if (realStatus === "failed") {
+  if (status === "failed") {
     const errStr = JSON.stringify(tx.meta?.err ?? "unknown").slice(0, 100);
     summary = `Solana tx FAILED (${errStr}). ${feeNative} SOL paid as fee.`;
   } else if (programIds.has(SYSTEM_PROGRAM) && programIds.size === 1) {
@@ -323,7 +320,7 @@ export async function solanaPostmortem(
     perspective,
     blockNumber: tx.slot.toString(),
     ...(blockTimeIso ? { blockTimeIso } : {}),
-    status: realStatus,
+    status,
     feeNative,
     feeNativeSymbol: SOL_SYMBOL,
     ...(feeUsd !== undefined ? { feeUsd } : {}),
