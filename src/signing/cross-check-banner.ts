@@ -84,11 +84,11 @@ const BANNER_RULE = "═".repeat(40);
  */
 export function buildCrossCheckBanner(): string {
   return [
-    `${BANNER_RULE}`,
+    BANNER_RULE,
     `VAULTPILOT CROSS-CHECK ${CROSS_CHECK_SPEC_VERSION} — pin SHA once, verify on every call`,
     `SHA-256: ${CROSS_CHECK_SPEC_SHA256}`,
     `Spec:    ${CROSS_CHECK_SPEC_URL}`,
-    `${BANNER_RULE}`,
+    BANNER_RULE,
   ].join("\n");
 }
 

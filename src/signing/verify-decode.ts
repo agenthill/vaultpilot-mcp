@@ -281,7 +281,7 @@ export async function verifyEvmCalldata(
   const namesMatch = !localFunctionName || independentFunctionName === localFunctionName;
   const independentArgs = chosen.args.map((raw, i) => ({
     index: i,
-    type: chosen!.abiItem.inputs[i]?.type ?? "unknown",
+    type: chosen.abiItem.inputs[i]?.type ?? "unknown",
     value: stringifyRaw(raw),
   }));
 
