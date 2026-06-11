@@ -204,24 +204,16 @@ function lookupKnownSpender(
     if (typeof addrs !== "object" || addrs === null) continue;
     for (const [name, addr] of Object.entries(addrs)) {
       if (typeof addr !== "string" || addr.toLowerCase() !== target) continue;
-      const protoLabel = (() => {
-        switch (protocol) {
-          case "aave":
-            return "Aave V3";
-          case "uniswap":
-            return "Uniswap V3";
-          case "lido":
-            return "Lido";
-          case "eigenlayer":
-            return "EigenLayer";
-          case "compound":
-            return "Compound V3";
-          case "morpho":
-            return "Morpho Blue";
-          default:
-            return protocol.charAt(0).toUpperCase() + protocol.slice(1);
-        }
-      })();
+      let protoLabel: string;
+      switch (protocol) {
+        case "aave": protoLabel = "Aave V3"; break;
+        case "uniswap": protoLabel = "Uniswap V3"; break;
+        case "lido": protoLabel = "Lido"; break;
+        case "eigenlayer": protoLabel = "EigenLayer"; break;
+        case "compound": protoLabel = "Compound V3"; break;
+        case "morpho": protoLabel = "Morpho Blue"; break;
+        default: protoLabel = protocol.charAt(0).toUpperCase() + protocol.slice(1);
+      }
       const niceName = name.charAt(0).toUpperCase() + name.slice(1);
       return `${protoLabel} ${niceName}`;
     }

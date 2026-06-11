@@ -296,12 +296,12 @@ export async function getTokenAllowances(
     const allowance = currentAllowances[i];
     if (allowance === 0n) continue;
     const spender = uniqueSpenders[i];
-    const meta2 = lastBySpender.get(spender)!;
+    const eventMeta = lastBySpender.get(spender)!;
     const isUnlimited = allowance >= UNLIMITED_THRESHOLD;
     if (isUnlimited) unlimitedCount++;
     const label = knownSpenderMap.get(spender.toLowerCase());
-    const lastApprovedAt = meta2.timeStamp
-      ? new Date(Number(meta2.timeStamp) * 1000).toISOString()
+    const lastApprovedAt = eventMeta.timeStamp
+      ? new Date(Number(eventMeta.timeStamp) * 1000).toISOString()
       : undefined;
     rows.push({
       spender,
@@ -311,8 +311,8 @@ export async function getTokenAllowances(
         ? "unlimited"
         : formatUnits(allowance, meta.decimals),
       isUnlimited,
-      lastApprovedBlock: meta2.blockNumber,
-      lastApprovedTxHash: meta2.txHash,
+      lastApprovedBlock: eventMeta.blockNumber,
+      lastApprovedTxHash: eventMeta.txHash,
       ...(lastApprovedAt ? { lastApprovedAt } : {}),
     });
   }
