@@ -77,6 +77,11 @@ const DEFILLAMA_CHAIN_TO_OURS: Record<string, AnyChain> = {
   Solana: "solana",
 };
 
+/** Reverse of DEFILLAMA_CHAIN_TO_OURS — our `AnyChain` to DefiLlama display name. */
+const OURS_TO_DEFILLAMA_CHAIN: Record<string, string> = Object.fromEntries(
+  Object.entries(DEFILLAMA_CHAIN_TO_OURS).map(([llama, ours]) => [ours, llama]),
+);
+
 /** EVM chains we'll emit Morpho Blue rows on. Other DefiLlama-listed
  * Morpho chains (Hyperliquid L1, Katana, Unichain, etc.) aren't in our
  * `SupportedChain` union, so we'd have nowhere to render them. */
@@ -176,28 +181,25 @@ export async function readDefiLlamaYields(
 
   const rows: YieldRow[] = [];
 
-  // Marinade — only emits for asset=SOL on Solana.
+  // Marinade and Jito — only emit for asset=SOL on Solana.
   if (asset === "SOL" && requestedChains.includes("solana")) {
-    const pool = pools.find(
+    const marinade = pools.find(
       (p) =>
         p.project === "marinade-liquid-staking" &&
         p.chain === "Solana" &&
         p.symbol === "MSOL",
     );
-    const row = poolToRow(pool, "marinade", "solana", "MSOL");
-    if (row) rows.push(row);
-  }
+    const marinadeRow = poolToRow(marinade, "marinade", "solana", "MSOL");
+    if (marinadeRow) rows.push(marinadeRow);
 
-  // Jito — only emits for asset=SOL on Solana.
-  if (asset === "SOL" && requestedChains.includes("solana")) {
-    const pool = pools.find(
+    const jito = pools.find(
       (p) =>
         p.project === "jito-liquid-staking" &&
         p.chain === "Solana" &&
         p.symbol === "JITOSOL",
     );
-    const row = poolToRow(pool, "jito", "solana", "JITOSOL");
-    if (row) rows.push(row);
+    const jitoRow = poolToRow(jito, "jito", "solana", "JITOSOL");
+    if (jitoRow) rows.push(jitoRow);
   }
 
   // Kamino lending — exact-symbol match for USDC/USDT/SOL on Solana.
@@ -230,7 +232,7 @@ export async function readDefiLlamaYields(
   if (morphoMatcher) {
     for (const evmChain of MORPHO_EVM_CHAINS) {
       if (!requestedChains.includes(evmChain)) continue;
-      const llamaChain = ourChainToDefiLlama(evmChain);
+      const llamaChain = OURS_TO_DEFILLAMA_CHAIN[evmChain];
       if (!llamaChain) continue;
 
       const vaults = pools
@@ -254,14 +256,6 @@ export async function readDefiLlamaYields(
   }
 
   return { rows, unavailable: [] };
-}
-
-/** Reverse the chain map. */
-function ourChainToDefiLlama(chain: AnyChain): string | null {
-  for (const [llama, ours] of Object.entries(DEFILLAMA_CHAIN_TO_OURS)) {
-    if (ours === chain) return llama;
-  }
-  return null;
 }
 
 function kaminoSymbolFor(asset: SupportedAsset): string | null {
