@@ -334,7 +334,6 @@ export async function pairLedgerTron(args: PairLedgerTronArgs = {}): Promise<{
  * plugged in, unlocked, with the Solana app open. Reads + caches the
  * device address at path `44'/501'/<accountIndex>'` (default 0 = first
  * Ledger Live Solana account).
- * bump
  */
 /**
  * Pair the host's directly-connected Ledger device for Bitcoin signing.
