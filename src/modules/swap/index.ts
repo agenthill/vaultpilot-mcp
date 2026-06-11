@@ -249,9 +249,8 @@ function sumLifiCostsUsd(items: readonly LifiCostLike[] | undefined): number | u
     if (Number.isFinite(derived)) {
       // Both available: trust derived if they disagree wildly (stated is the known-bad
       // source). 10× threshold catches the "raw-units-as-USD" class of bug.
-      if (Number.isFinite(stated) && derived > 0 && stated / derived > 10) {
-        total += derived;
-      } else if (Number.isFinite(stated) && stated >= 0) {
+      const statedOk = Number.isFinite(stated) && stated >= 0;
+      if (statedOk && !(derived > 0 && stated / derived > 10)) {
         total += stated;
       } else {
         total += derived;
@@ -337,13 +336,10 @@ function rephraseLifiNoRouteError(
     msg.includes("no route") ||
     msg.includes("not found");
   if (!looksLikeNoRoute) return baseErr;
-  const filterParts: string[] = [];
-  if (args.exchanges && args.exchanges.length > 0) {
-    filterParts.push(`exchanges=[${args.exchanges.join(", ")}]`);
-  }
-  if (args.bridges && args.bridges.length > 0) {
-    filterParts.push(`bridges=[${args.bridges.join(", ")}]`);
-  }
+  const filterParts = [
+    ...(args.exchanges && args.exchanges.length > 0 ? [`exchanges=[${args.exchanges.join(", ")}]`] : []),
+    ...(args.bridges && args.bridges.length > 0 ? [`bridges=[${args.bridges.join(", ")}]`] : []),
+  ];
   return new Error(
     `LiFi found no route satisfying ${filterParts.join(" + ")}. ` +
       `Original LiFi error: ${baseErr.message}. ` +
@@ -852,12 +848,16 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
   // warning path in getSwapQuote.
   const fromPriceUsd = Number(quote.action.fromToken.priceUSD ?? NaN);
   const toPriceUsd = Number(quote.action.toToken.priceUSD ?? NaN);
-  const fromAmountFormatted = Number(
-    formatUnits(BigInt(quote.action.fromAmount), quote.action.fromToken.decimals)
+  const quotedFromAmount = formatUnits(
+    BigInt(quote.action.fromAmount),
+    quote.action.fromToken.decimals
   );
-  const toAmountFormatted = Number(
-    formatUnits(BigInt(quote.estimate.toAmount), quote.action.toToken.decimals)
+  const quotedToAmount = formatUnits(
+    BigInt(quote.estimate.toAmount),
+    quote.action.toToken.decimals
   );
+  const fromAmountFormatted = Number(quotedFromAmount);
+  const toAmountFormatted = Number(quotedToAmount);
   if (
     Number.isFinite(fromPriceUsd) &&
     Number.isFinite(toPriceUsd) &&
@@ -879,14 +879,6 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
   const fromSym = quote.action.fromToken.symbol;
   const toSym = quote.action.toToken.symbol;
   const crossChain = args.fromChain !== args.toChain;
-  const quotedFromAmount = formatUnits(
-    BigInt(quote.action.fromAmount),
-    quote.action.fromToken.decimals
-  );
-  const quotedToAmount = formatUnits(
-    BigInt(quote.estimate.toAmount),
-    quote.action.toToken.decimals
-  );
   const fromDisplay = isExactOut ? `~${quotedFromAmount}` : args.amount;
   const toDisplay = isExactOut ? args.amount : `~${quotedToAmount}`;
   // Issue #411 — when the agent passed an `exchanges` filter and the
@@ -912,11 +904,9 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
   // on cross-chain routes because a bridge facet's output value isn't
   // sandwich-extractable in the same way (slippage there bounds bridge
   // delivery, not pool-state reordering).
-  const fromAmountForUsd = Number(quotedFromAmount);
-  const fromPriceUsdRaw = Number(quote.action.fromToken.priceUSD ?? NaN);
   const fromAmountUsd =
-    Number.isFinite(fromAmountForUsd) && Number.isFinite(fromPriceUsdRaw)
-      ? fromAmountForUsd * fromPriceUsdRaw
+    Number.isFinite(fromAmountFormatted) && Number.isFinite(fromPriceUsd)
+      ? fromAmountFormatted * fromPriceUsd
       : undefined;
   const mevNote = !crossChain
     ? mevExposureNote(chain, args.slippageBps ?? 50, fromAmountUsd)
