@@ -166,6 +166,19 @@ Both properties anchor cryptographic integrity at the Ledger screen — the only
 
 The residual risk is the user not performing the on-device check (rubber-stamping the Ledger screen). This is a procedural failure, not a software defense gap. Skill v0.6.0+ §5 (final on-device match) is the agent-side prompt that makes the check explicit before signing.
 
+## Out-of-scope: read-only data-plane integrity
+
+VaultPilot assumes the MCP server does not fabricate **read-only** data. Portfolio rows, balances, prices, yield comparisons, daily-briefing deltas, market-incident narratives, tax-stance figures, ENS resolutions, protocol risk scores, and transaction history are surfaced to the agent as facts; a compromised MCP — or a rogue RPC behind it — that returns falsified read-only data to mislead the agent's advisory prose is **out of scope**.
+
+This is a deliberate trust assumption, not an unexamined gap. Every proposed mitigation routes the verification channel back through the same adversary:
+
+- **MCP-side response signing** is the self-attestation antipattern — a rogue MCP forges the key and the signature field at identical cost. Any field returned inside the same response it is meant to authenticate carries zero integrity weight (cf. [#566](https://github.com/szhygulin/vaultpilot-mcp/issues/566) / [#591](https://github.com/szhygulin/vaultpilot-mcp/issues/591) / [#592](https://github.com/szhygulin/vaultpilot-mcp/issues/592)).
+- **Skill-side cross-check** — a second RPC, multi-RPC consensus, or a Chainlink read — has no transport channel except the MCP's own tools, so the corroborating read is still inside the rogue-MCP boundary.
+
+The protection boundary is the **signing path**: the design prevents the user from *signing the wrong transaction*, anchoring cryptographic integrity at the Ledger screen (on-device clear-sign + end-to-end hash propagation, above). It does not — and structurally cannot — guarantee the integrity of read-only advisory data the agent relays in chat.
+
+The only effective countermeasure is **out-of-band verification against a third-party surface the MCP cannot intercept**, and it exists only where such a surface does. For ENS resolution, `resolve_ens_name` / `reverse_resolve_ens` surface a third-party `verificationUrl` (`app.ens.domains`) the user opens in their own browser ([#574](https://github.com/szhygulin/vaultpilot-mcp/issues/574)); for balances and prices, the user's own block explorer or a price aggregator serves the same role. These are user-side procedural checks the server points at but cannot enforce. Tracked at [#565](https://github.com/szhygulin/vaultpilot-mcp/issues/565); see also the duplicate read-layer report [#669](https://github.com/szhygulin/vaultpilot-mcp/issues/669).
+
 ## Verifying the server-side `payloadFingerprint` yourself
 
 EVM preimage: `"VaultPilot-txverify-v1:" ‖ chainId (32-byte BE) ‖ to (20 bytes) ‖ value (32-byte BE) ‖ data`.
