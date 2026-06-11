@@ -268,6 +268,16 @@ const ABI_VARIANTS: ReadonlyArray<{ variant: AbiVariant; abi: Abi }> = [
 // the trial-decode loop.
 const variantCache = new Map<string, AbiVariant>();
 
+/** Returns ABI_VARIANTS reordered so the cached variant (if any) is tried first. */
+function orderedVariants(uiProvider: `0x${string}`): ReadonlyArray<{ variant: AbiVariant; abi: Abi }> {
+  const cached = variantCache.get(uiProvider.toLowerCase());
+  if (!cached) return ABI_VARIANTS;
+  return [
+    ABI_VARIANTS.find((v) => v.variant === cached)!,
+    ...ABI_VARIANTS.filter((v) => v.variant !== cached),
+  ];
+}
+
 /**
  * Test-only escape hatch — drops the cached variant for a given
  * uiProvider so a subsequent call re-runs the trial-decode loop.
@@ -322,13 +332,7 @@ function tryDecodeReserves(
   uiProvider: `0x${string}`,
 ): { reserves: AaveReserveNormalized[]; baseCurrency: AaveBaseCurrencyNormalized; variant: AbiVariant } {
   const cacheKey = uiProvider.toLowerCase();
-  const cached = variantCache.get(cacheKey);
-  const order: ReadonlyArray<{ variant: AbiVariant; abi: Abi }> = cached
-    ? [
-        ABI_VARIANTS.find((v) => v.variant === cached)!,
-        ...ABI_VARIANTS.filter((v) => v.variant !== cached),
-      ]
-    : ABI_VARIANTS;
+  const order = orderedVariants(uiProvider);
 
   let lastErr: unknown;
   for (const { variant, abi } of order) {
@@ -395,13 +399,7 @@ function tryDecodeUserReserves(
   // getReservesData; v3.2 and v3.3 use identical user shapes so caching
   // either gives a correct decode.
   const cacheKey = uiProvider.toLowerCase();
-  const cached = variantCache.get(cacheKey);
-  const order: ReadonlyArray<{ variant: AbiVariant; abi: Abi }> = cached
-    ? [
-        ABI_VARIANTS.find((v) => v.variant === cached)!,
-        ...ABI_VARIANTS.filter((v) => v.variant !== cached),
-      ]
-    : ABI_VARIANTS;
+  const order = orderedVariants(uiProvider);
 
   let lastErr: unknown;
   for (const { variant, abi } of order) {

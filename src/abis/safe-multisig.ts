@@ -2,7 +2,6 @@
 // Pulled from the canonical Safe contracts source at
 // https://github.com/safe-global/safe-smart-account; only the shapes our
 // tools actually call live here so the bundle stays small.
-// bump
 
 export const safeMultisigAbi = [
   {
