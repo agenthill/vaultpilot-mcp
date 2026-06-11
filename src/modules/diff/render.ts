@@ -32,8 +32,7 @@ function formatUsd(n: number): string {
 
 function formatSignedUsd(n: number): string {
   if (Math.abs(n) < 0.01) return "$0";
-  const isNeg = n < 0;
-  return (isNeg ? "" : "+") + formatUsd(n);
+  return (n < 0 ? "" : "+") + formatUsd(n);
 }
 
 function formatPct(value: number, base: number): string {
