@@ -529,9 +529,12 @@ import {
   renderPreflightSkillPinBlock,
   renderPostBroadcastBlock,
   renderPostSendPollBlock,
+  renderBitcoinCostPreviewBlock,
   renderBitcoinVerificationBlock,
   renderCostPreviewBlock,
+  renderLitecoinCostPreviewBlock,
   renderLitecoinVerificationBlock,
+  renderSolanaCostPreviewBlock,
   renderPrepareReceiptBlock,
   renderPreviewCostBlock,
   renderPreviewVerifyAgentTaskBlock,
@@ -787,6 +790,11 @@ export async function collectVerificationBlocks(
       r.decoded !== undefined
     ) {
       const prepared = result as RenderableSolanaPrepareResult;
+      // Fee-shock abort signal FIRST (issue #649) — the prepare draft already
+      // carries `estimatedFeeLamports`. Null when absent, native-only on price
+      // degrade, mirroring the EVM cost block.
+      const cost = await renderSolanaCostPreviewBlock(prepared);
+      if (cost) blocks.push(cost);
       blocks.push(renderSolanaPrepareSummaryBlock(prepared));
       blocks.push(renderSolanaPrepareAgentTaskBlock(prepared));
     }
@@ -797,11 +805,19 @@ export async function collectVerificationBlocks(
   // projection IS the review surface. Handle BEFORE the `!verification`
   // early-return that the EVM branch relies on.
   if (chain === "bitcoin" && typeof r.psbtBase64 === "string") {
-    blocks.push(renderBitcoinVerificationBlock(result as UnsignedBitcoinTx));
+    const btcTx = result as UnsignedBitcoinTx;
+    // Fee-shock abort signal FIRST (issue #649), mirroring the EVM cost
+    // block — null when the fee field is absent, native-only on price degrade.
+    const cost = await renderBitcoinCostPreviewBlock(btcTx);
+    if (cost) blocks.push(cost);
+    blocks.push(renderBitcoinVerificationBlock(btcTx));
     return blocks;
   }
   if (chain === "litecoin" && typeof r.psbtBase64 === "string") {
-    blocks.push(renderLitecoinVerificationBlock(result as UnsignedLitecoinTx));
+    const ltcTx = result as UnsignedLitecoinTx;
+    const cost = await renderLitecoinCostPreviewBlock(ltcTx);
+    if (cost) blocks.push(cost);
+    blocks.push(renderLitecoinVerificationBlock(ltcTx));
     return blocks;
   }
   if (!verification) return blocks;
@@ -815,6 +831,11 @@ export async function collectVerificationBlocks(
     // Pinned Solana tx — emitted by `preview_solana_send`. Full VERIFY +
     // CHECKS block (agent auto-runs CHECK 1 + CHECK 2, matches hash).
     const solanaTx = result as UnsignedSolanaTx;
+    // Fee-shock abort signal FIRST (issue #649), mirroring the EVM cost
+    // block — null when `estimatedFeeLamports` is absent, native-only on
+    // price degrade.
+    const cost = await renderSolanaCostPreviewBlock(solanaTx);
+    if (cost) blocks.push(cost);
     blocks.push(renderSolanaVerificationBlock(solanaTx));
     blocks.push(renderSolanaAgentTaskBlock(solanaTx));
     return blocks;

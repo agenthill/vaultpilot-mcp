@@ -10,9 +10,12 @@ import {
 } from "../src/signing/verification.js";
 import { decodeCalldata } from "../src/signing/decode-calldata.js";
 import {
+  renderBitcoinCostPreviewBlock,
   renderCostPreviewBlock,
+  renderLitecoinCostPreviewBlock,
   renderPostSendPollBlock,
   renderPreviewCostBlock,
+  renderSolanaCostPreviewBlock,
   renderTronAgentTaskBlock,
   renderTronVerificationBlock,
   renderVerificationBlock,
@@ -508,6 +511,110 @@ describe("renderPreviewCostBlock — issue #650 preview-time fee surface", () =>
       gas: "21000",
     });
     expect(out).toMatch(/Pinned network fee: ~\$0\.02 \(≈ 0\.04 (MATIC|POL)\)/);
+  });
+});
+
+describe("renderSolanaCostPreviewBlock — issue #649 non-EVM fee-shock signal", () => {
+  // Deterministic stub prices so no test hits DefiLlama over the network.
+  const solPrice = async () => 150; // $150 / SOL
+  const priceDown = async () => undefined;
+
+  it("renders native + USD when fee present and price available", async () => {
+    // 0.000005 SOL = 5000 lamports; × $150 = $0.00075 → rounds to $0.00.
+    const out = await renderSolanaCostPreviewBlock(
+      { estimatedFeeLamports: 5000 },
+      solPrice,
+    );
+    expect(out).toBe("Estimated network fee: ~$0.00 (≈ 0.000005 SOL)");
+  });
+
+  it("anchors a larger fee in USD with 2-decimal rounding", async () => {
+    // 0.01 SOL = 10_000_000 lamports; × $150 = $1.50.
+    const out = await renderSolanaCostPreviewBlock(
+      { estimatedFeeLamports: 10_000_000 },
+      solPrice,
+    );
+    expect(out).toBe("Estimated network fee: ~$1.50 (≈ 0.01 SOL)");
+  });
+
+  it("falls back to native-only when the price lookup degrades", async () => {
+    const out = await renderSolanaCostPreviewBlock(
+      { estimatedFeeLamports: 5000 },
+      priceDown,
+    );
+    expect(out).toBe(
+      "Estimated network fee: ≈ 0.000005 SOL (USD price unavailable)",
+    );
+  });
+
+  it("returns null when estimatedFeeLamports is absent", async () => {
+    expect(await renderSolanaCostPreviewBlock({}, solPrice)).toBeNull();
+  });
+});
+
+describe("renderBitcoinCostPreviewBlock — issue #649 non-EVM fee-shock signal", () => {
+  const btcPrice = async () => 60_000; // $60k / BTC
+  const priceDown = async () => undefined;
+
+  it("renders native + USD when fee present and price available", async () => {
+    // 0.0001 BTC × $60k = $6.00.
+    const out = await renderBitcoinCostPreviewBlock(
+      { decoded: { feeBtc: "0.0001" } },
+      btcPrice,
+    );
+    expect(out).toBe("Estimated network fee: ~$6.00 (≈ 0.0001 BTC)");
+  });
+
+  it("falls back to native-only when the price lookup degrades", async () => {
+    const out = await renderBitcoinCostPreviewBlock(
+      { decoded: { feeBtc: "0.0001" } },
+      priceDown,
+    );
+    expect(out).toBe(
+      "Estimated network fee: ≈ 0.0001 BTC (USD price unavailable)",
+    );
+  });
+
+  it("returns null when feeBtc is absent", async () => {
+    expect(
+      await renderBitcoinCostPreviewBlock(
+        { decoded: {} as { feeBtc?: string } },
+        btcPrice,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("renderLitecoinCostPreviewBlock — issue #649 non-EVM fee-shock signal", () => {
+  const ltcPrice = async () => 80; // $80 / LTC
+  const priceDown = async () => undefined;
+
+  it("renders native + USD when fee present and price available", async () => {
+    // 0.001 LTC × $80 = $0.08.
+    const out = await renderLitecoinCostPreviewBlock(
+      { decoded: { feeLtc: "0.001" } },
+      ltcPrice,
+    );
+    expect(out).toBe("Estimated network fee: ~$0.08 (≈ 0.001 LTC)");
+  });
+
+  it("falls back to native-only when the price lookup degrades", async () => {
+    const out = await renderLitecoinCostPreviewBlock(
+      { decoded: { feeLtc: "0.001" } },
+      priceDown,
+    );
+    expect(out).toBe(
+      "Estimated network fee: ≈ 0.001 LTC (USD price unavailable)",
+    );
+  });
+
+  it("returns null when feeLtc is absent", async () => {
+    expect(
+      await renderLitecoinCostPreviewBlock(
+        { decoded: {} as { feeLtc?: string } },
+        ltcPrice,
+      ),
+    ).toBeNull();
   });
 });
 
