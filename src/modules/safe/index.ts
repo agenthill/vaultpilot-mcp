@@ -237,15 +237,14 @@ async function loadSafesForOwner(
     ),
   );
   const safes: SafeAccount[] = [];
-  for (let i = 0; i < settled.length; i++) {
-    const r = settled[i];
+  settled.forEach((r, i) => {
     if (r.status === "fulfilled") {
       safes.push(r.value);
     } else {
       const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
       perSafeErrors.push(`${safeAddresses[i]}: ${reason}`);
     }
-  }
+  });
   return { safes, perSafeErrors };
 }
 
@@ -307,7 +306,7 @@ export async function getSafePositions(
           );
         }
         await Promise.all(tasks);
-        if (!coverage.find((c) => c.chain === chain)) {
+        if (!coverage.some((c) => c.chain === chain)) {
           coverage.push({ chain, errored: false });
         }
       } catch (e) {

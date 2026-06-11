@@ -87,10 +87,7 @@ async function readApprovalState(args: {
       }) as Promise<bigint>,
     ),
   );
-  const approvedOwners: `0x${string}`[] = [];
-  for (let i = 0; i < owners.length; i++) {
-    if (approvalFlags[i] !== 0n) approvedOwners.push(owners[i]);
-  }
+  const approvedOwners = owners.filter((_, i) => approvalFlags[i] !== 0n);
   return {
     threshold: Number(threshold),
     owners: [...owners],
@@ -122,8 +119,9 @@ function buildSignaturesBlob(args: {
   // Combined eligible-signer set: confirmed approveHashers + the executor
   // (when they're an owner). Lower-cased keys for set semantics.
   const eligible = new Set<string>(args.approvedOwners.map((o) => o.toLowerCase()));
-  if (args.ownersSet.has(args.executor.toLowerCase())) {
-    eligible.add(args.executor.toLowerCase());
+  const executorLc = args.executor.toLowerCase();
+  if (args.ownersSet.has(executorLc)) {
+    eligible.add(executorLc);
   }
   if (eligible.size < args.threshold) {
     throw new Error(
