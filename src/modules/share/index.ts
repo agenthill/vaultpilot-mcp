@@ -37,13 +37,20 @@ function autoName(id: string): string {
   return `share-${id.replace(/-/g, "").slice(0, 4)}`;
 }
 
+function walletCounts(
+  wallets: ShareWallets,
+): { evm: number; tron: number; solana: number; btc: number } {
+  return {
+    evm: wallets.evm?.length ?? 0,
+    tron: wallets.tron?.length ?? 0,
+    solana: wallets.solana?.length ?? 0,
+    btc: wallets.btc?.length ?? 0,
+  };
+}
+
 function countAddresses(wallets: ShareWallets): number {
-  return (
-    (wallets.evm?.length ?? 0) +
-    (wallets.tron?.length ?? 0) +
-    (wallets.solana?.length ?? 0) +
-    (wallets.btc?.length ?? 0)
-  );
+  const c = walletCounts(wallets);
+  return c.evm + c.tron + c.solana + c.btc;
 }
 
 export interface GenerateReadonlyLinkResult {
@@ -112,12 +119,7 @@ export function generateReadonlyLink(
     scope: args.scope,
     issuedAt,
     expiresAt,
-    walletCounts: {
-      evm: args.wallets.evm?.length ?? 0,
-      tron: args.wallets.tron?.length ?? 0,
-      solana: args.wallets.solana?.length ?? 0,
-      btc: args.wallets.btc?.length ?? 0,
-    },
+    walletCounts: walletCounts(args.wallets),
   };
 }
 
@@ -199,12 +201,7 @@ export function listReadonlyInvites(
       revokedAt: inv.revokedAt,
       expired,
       active: !revoked && !expired,
-      walletCounts: {
-        evm: inv.wallets.evm?.length ?? 0,
-        tron: inv.wallets.tron?.length ?? 0,
-        solana: inv.wallets.solana?.length ?? 0,
-        btc: inv.wallets.btc?.length ?? 0,
-      },
+      walletCounts: walletCounts(inv.wallets),
       totalAddresses: countAddresses(inv.wallets),
     };
   });
