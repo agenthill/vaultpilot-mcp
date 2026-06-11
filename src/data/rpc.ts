@@ -35,22 +35,21 @@ function isTrackedEvmChain(
  * either shape — the goal is "did the upstream throttle us", not
  * "exact wire shape".
  */
+function isRateLimitNode(node: { status?: number; code?: number }): boolean {
+  return node.status === 429 || node.code === -32005;
+}
+
 function isRateLimitError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as {
     status?: number;
     code?: number;
-    cause?: { status?: number; code?: number };
-    details?: string;
+    cause?: { status?: number; code?: number; cause?: { status?: number; code?: number } };
   };
-  if (e.status === 429) return true;
-  if (e.code === -32005) return true;
-  if (e.cause?.status === 429) return true;
-  if (e.cause?.code === -32005) return true;
+  if (isRateLimitNode(e)) return true;
+  if (e.cause && isRateLimitNode(e.cause)) return true;
   // viem sometimes nests further (HttpRequestError → cause → cause).
-  const innerCause = (e.cause as { cause?: { status?: number; code?: number } })?.cause;
-  if (innerCause?.status === 429) return true;
-  if (innerCause?.code === -32005) return true;
+  if (e.cause?.cause && isRateLimitNode(e.cause.cause)) return true;
   return false;
 }
 
@@ -111,12 +110,11 @@ class Semaphore {
 
 const limiters = new Map<SupportedChain, Semaphore>();
 function getLimiter(chain: SupportedChain): Semaphore {
-  let l = limiters.get(chain);
-  if (!l) {
-    l = new Semaphore(RPC_CONCURRENCY);
-    limiters.set(chain, l);
-  }
-  return l;
+  const existing = limiters.get(chain);
+  if (existing) return existing;
+  const limiter = new Semaphore(RPC_CONCURRENCY);
+  limiters.set(chain, limiter);
+  return limiter;
 }
 
 // Invalidate cached clients + the verified-chains memo whenever the user
