@@ -326,19 +326,6 @@ export function burnAmounts(args: {
 }
 
 /**
- * Reuses ratiosAfterSlippage. Exposed so `burnAmountsWithSlippage`
- * can re-enter without duplication. Inlined here to keep
- * `ratiosAfterSlippage` private to this module — both helpers share
- * the same algebra.
- */
-function ratiosAfterSlippagePublic(
-  pool: PoolState,
-  slippageBps: number,
-): { sqrtRatioX96Lower: bigint; sqrtRatioX96Upper: bigint } {
-  return ratiosAfterSlippage(pool, slippageBps);
-}
-
-/**
  * Compute the slippage-bounded `amount0Min` / `amount1Min` the
  * `decreaseLiquidity(...)` call should pass — the user wants to
  * receive *at least* these amounts after slippage. SDK reference:
@@ -359,7 +346,7 @@ export function burnAmountsWithSlippage(args: {
   liquidity: bigint;
   slippageBps: number;
 }): { amount0: bigint; amount1: bigint } {
-  const { sqrtRatioX96Lower, sqrtRatioX96Upper } = ratiosAfterSlippagePublic(
+  const { sqrtRatioX96Lower, sqrtRatioX96Upper } = ratiosAfterSlippage(
     args.pool,
     args.slippageBps,
   );
