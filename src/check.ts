@@ -170,55 +170,34 @@ export function runDoctor(): DoctorReport {
 
   // 5. TronGrid API key. Public TronGrid is rate-limited to ~15
   //    req/min, too tight for portfolio fan-out. Missing → warn.
-  const tronApiKey = resolveTronApiKey(userConfig);
-  if (tronApiKey) {
-    checks.push({
-      name: "tron-api-key",
-      status: "ok",
-      message: "TronGrid API key configured (TRON_API_KEY env or config.tronApiKey).",
-    });
-  } else {
-    checks.push({
-      name: "tron-api-key",
-      status: "warn",
-      message: "TronGrid API key not configured. TRON reads will hit ~15 req/min rate limit. Set TRON_API_KEY env var or run the setup wizard.",
-    });
-  }
+  pushKeyCheck(
+    checks,
+    "tron-api-key",
+    resolveTronApiKey(userConfig),
+    "TronGrid API key configured (TRON_API_KEY env or config.tronApiKey).",
+    "TronGrid API key not configured. TRON reads will hit ~15 req/min rate limit. Set TRON_API_KEY env var or run the setup wizard.",
+  );
 
   // 6. WalletConnect project ID. Required for EVM signing via Ledger
   //    Live. Missing → signing tools refuse; reads still work.
-  const wcProjectId = resolveWalletConnectProjectId(userConfig);
-  if (wcProjectId) {
-    checks.push({
-      name: "walletconnect-project-id",
-      status: "ok",
-      message: "WalletConnect project ID configured (EVM signing path enabled).",
-    });
-  } else {
-    checks.push({
-      name: "walletconnect-project-id",
-      status: "warn",
-      message: "WalletConnect project ID not configured. EVM signing via `pair_ledger_live` + `send_transaction` will refuse. Read-only tools unaffected.",
-    });
-  }
+  pushKeyCheck(
+    checks,
+    "walletconnect-project-id",
+    resolveWalletConnectProjectId(userConfig),
+    "WalletConnect project ID configured (EVM signing path enabled).",
+    "WalletConnect project ID not configured. EVM signing via `pair_ledger_live` + `send_transaction` will refuse. Read-only tools unaffected.",
+  );
 
   // 7. Etherscan API key. Used by allowlist + late-broadcast probe
   //    (issue #326 P1). Missing → those defenses fall back to local-
   //    RPC-only behavior; reads still work.
-  const etherscanApiKey = resolveEtherscanApiKey(userConfig);
-  if (etherscanApiKey) {
-    checks.push({
-      name: "etherscan-api-key",
-      status: "ok",
-      message: "Etherscan API key configured (selector cross-check + multi-source nonce probe enabled).",
-    });
-  } else {
-    checks.push({
-      name: "etherscan-api-key",
-      status: "warn",
-      message: "Etherscan API key not configured. Selector cross-check and the issue-#326 multi-source nonce probe will fall back to single-source behavior. Set ETHERSCAN_API_KEY or run the setup wizard.",
-    });
-  }
+  pushKeyCheck(
+    checks,
+    "etherscan-api-key",
+    resolveEtherscanApiKey(userConfig),
+    "Etherscan API key configured (selector cross-check + multi-source nonce probe enabled).",
+    "Etherscan API key not configured. Selector cross-check and the issue-#326 multi-source nonce probe will fall back to single-source behavior. Set ETHERSCAN_API_KEY or run the setup wizard.",
+  );
 
   // 8. Server bootstrap sanity. Try to require the MCP SDK constructor
   //    — if any transitively-required module is broken (corrupt
@@ -304,6 +283,21 @@ export function runDoctor(): DoctorReport {
       legacyConfigExists: legacyExists,
     },
   };
+}
+
+/** Push an ok/warn check for a single optional key or URL. */
+function pushKeyCheck(
+  checks: CheckResult[],
+  name: string,
+  present: string | undefined,
+  okMessage: string,
+  warnMessage: string,
+): void {
+  checks.push({
+    name,
+    status: present ? "ok" : "warn",
+    message: present ? okMessage : warnMessage,
+  });
 }
 
 interface RpcSourceDescription {
