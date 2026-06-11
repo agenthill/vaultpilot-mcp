@@ -71,13 +71,10 @@ async function fetchWithRateLimitDetect(
         // the EVM tracker watches for.
         // Substring match guards against operators that pick a different
         // numeric code but still send a recognizable message.
-        if (code === -32429 || code === -32005) {
-          throttled = true;
-        } else if (
-          /rate.?limit|too many requests|quota|throttl/i.test(message)
-        ) {
-          throttled = true;
-        }
+        throttled =
+          code === -32429 ||
+          code === -32005 ||
+          /rate.?limit|too many requests|quota|throttl/i.test(message);
       }
     } catch {
       // body wasn't JSON, or already consumed elsewhere — leave throttled false.

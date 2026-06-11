@@ -224,7 +224,6 @@ export async function buildMarinadeStake(
   // working without code change. See issue #178.
   const BN = await loadAnchorBN();
   const result = await marinade.deposit(new BN(lamports.toString()));
-  const actionIxs = result.transaction.instructions;
 
   const draft = buildDraft({
     fromPubkey: ctx.fromPubkey,
@@ -242,7 +241,7 @@ export async function buildMarinadeStake(
         nonceAccount: ctx.noncePubkey.toBase58(),
       },
     },
-    actionIxs,
+    actionIxs: result.transaction.instructions,
   });
 
   const { handle } = issueSolanaDraftHandle(draft);
@@ -268,7 +267,6 @@ export async function buildMarinadeUnstakeImmediate(
   // fallback (issue #178).
   const BN = await loadAnchorBN();
   const result = await marinade.liquidUnstake(new BN(baseUnits.toString()));
-  const actionIxs = result.transaction.instructions;
 
   const draft = buildDraft({
     fromPubkey: ctx.fromPubkey,
@@ -286,7 +284,7 @@ export async function buildMarinadeUnstakeImmediate(
         nonceAccount: ctx.noncePubkey.toBase58(),
       },
     },
-    actionIxs,
+    actionIxs: result.transaction.instructions,
   });
 
   const { handle } = issueSolanaDraftHandle(draft);
