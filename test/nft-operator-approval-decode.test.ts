@@ -26,10 +26,45 @@ const SET_APPROVAL_FOR_ALL_ABI = [
   },
 ] as const;
 
+const SAFE_TRANSFER_FROM_3_ABI = [
+  {
+    type: "function",
+    name: "safeTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const SAFE_TRANSFER_FROM_4_ABI = [
+  {
+    type: "function",
+    name: "safeTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
 const UNCURATED_DESTINATION = getAddress(
   "0xdeaDBEefDEadBEefdEAdbeefdEAdbeEFdeaDbeEf",
 );
 const ATTACKER_OPERATOR = getAddress(
+  "0xBaDC0DeBADc0DeBaDc0DeBaDc0DeBaDc0DeBaDc0",
+);
+const NFT_OWNER = getAddress(
+  "0x1111111111111111111111111111111111111111",
+);
+const ATTACKER_RECIPIENT = getAddress(
   "0xBaDC0DeBADc0DeBaDc0DeBaDc0DeBaDc0DeBaDc0",
 );
 
@@ -160,5 +195,113 @@ describe("decodeCalldata — high-risk standard selector fallback (issue #573)",
     });
     const decoded = decodeCalldata("ethereum", usdc, data, "0");
     expect(decoded.source).toBe("local-abi");
+  });
+});
+
+/**
+ * Regression coverage for issue #670 (rogue-MCP-only / cooperating-agent
+ * slice) — `decodeCalldata` must surface the ERC-721 `safeTransferFrom`
+ * recipient (`to`) and `tokenId` even when the destination NFT contract is
+ * absent from the curated `CONTRACTS` map. A rogue MCP can route an NFT
+ * transfer to an attacker-controlled `to` on an uncurated collection while
+ * narrating a benign recipient; without this fallback the recipient is
+ * invisible in CHECKS PERFORMED and Inv #1 cannot flag the label/calldata
+ * mismatch. Mirrors the #573 setApprovalForAll high-risk-selector fallback.
+ */
+describe("decodeCalldata — ERC-721 safeTransferFrom selector fallback (issue #670)", () => {
+  it("decodes safeTransferFrom(from, to, tokenId) — 3-arg form — on an uncurated NFT contract", () => {
+    const data = encodeFunctionData({
+      abi: SAFE_TRANSFER_FROM_3_ABI,
+      functionName: "safeTransferFrom",
+      args: [NFT_OWNER, ATTACKER_RECIPIENT, 1337n],
+    });
+    expect(data.slice(0, 10)).toBe("0x42842e0e");
+
+    const decoded = decodeCalldata("ethereum", UNCURATED_DESTINATION, data, "0");
+
+    expect(decoded.source).toBe("local-abi-partial");
+    expect(decoded.functionName).toBe("safeTransferFrom");
+    expect(decoded.signature).toBe("safeTransferFrom(address,address,uint256)");
+
+    const named = Object.fromEntries(decoded.args.map((a) => [a.name, a]));
+    // The whole point: the recipient and tokenId surface in CHECKS PERFORMED.
+    expect(named.to).toBeDefined();
+    expect(named.to.type).toBe("address");
+    expect(named.to.value).toBe(ATTACKER_RECIPIENT);
+    expect(named.tokenId).toBeDefined();
+    expect(named.tokenId.type).toBe("uint256");
+    expect(named.tokenId.value).toBe("1337");
+    // `from` is also surfaced so the user can confirm the sender.
+    expect(named.from.type).toBe("address");
+    expect(named.from.value).toBe(NFT_OWNER);
+  });
+
+  it("decodes safeTransferFrom(from, to, tokenId, data) — 4-arg form with bytes tail — on an uncurated NFT contract", () => {
+    const data = encodeFunctionData({
+      abi: SAFE_TRANSFER_FROM_4_ABI,
+      functionName: "safeTransferFrom",
+      args: [NFT_OWNER, ATTACKER_RECIPIENT, 42n, "0xdeadbeef"],
+    });
+    expect(data.slice(0, 10)).toBe("0xb88d4fde");
+
+    const decoded = decodeCalldata("ethereum", UNCURATED_DESTINATION, data, "0");
+
+    expect(decoded.source).toBe("local-abi-partial");
+    expect(decoded.functionName).toBe("safeTransferFrom");
+    expect(decoded.signature).toBe(
+      "safeTransferFrom(address,address,uint256,bytes)",
+    );
+
+    const named = Object.fromEntries(decoded.args.map((a) => [a.name, a]));
+    // Recipient + tokenId must surface despite the dynamic bytes tail.
+    expect(named.to.type).toBe("address");
+    expect(named.to.value).toBe(ATTACKER_RECIPIENT);
+    expect(named.tokenId.type).toBe("uint256");
+    expect(named.tokenId.value).toBe("42");
+    expect(named.from.value).toBe(NFT_OWNER);
+    // The trailing bytes payload is surfaced too (presence/value), so a
+    // hook-bearing transfer can't hide an arbitrary data blob from the user.
+    expect(named.data).toBeDefined();
+    expect(named.data.type).toBe("bytes");
+    expect(named.data.value).toBe("0xdeadbeef");
+  });
+
+  it("recipient address is checksum-cased so it matches the swiss-knife render", () => {
+    const lowercaseRecipient =
+      "0xbadc0debadc0debadc0debadc0debadc0debadc0" as `0x${string}`;
+    const data = encodeFunctionData({
+      abi: SAFE_TRANSFER_FROM_3_ABI,
+      functionName: "safeTransferFrom",
+      args: [NFT_OWNER, lowercaseRecipient, 1n],
+    });
+    const decoded = decodeCalldata("ethereum", UNCURATED_DESTINATION, data, "0");
+    const named = Object.fromEntries(decoded.args.map((a) => [a.name, a]));
+    expect(named.to.value).toBe(getAddress(lowercaseRecipient));
+  });
+
+  it("rejects truncated 3-arg safeTransferFrom calldata (length guard)", () => {
+    // Selector + only two 32-byte words is not a valid (address, address,
+    // uint256) payload. Fall through to source:'none' rather than fabricate.
+    const truncated = ("0x42842e0e" + "00".repeat(64)) as `0x${string}`;
+    const decoded = decodeCalldata(
+      "ethereum",
+      UNCURATED_DESTINATION,
+      truncated,
+      "0",
+    );
+    expect(decoded.source).toBe("none");
+    expect(decoded.functionName).toBe("unknown");
+  });
+
+  it("rejects 3-arg safeTransferFrom calldata with trailing junk (length guard)", () => {
+    const validData = encodeFunctionData({
+      abi: SAFE_TRANSFER_FROM_3_ABI,
+      functionName: "safeTransferFrom",
+      args: [NFT_OWNER, ATTACKER_RECIPIENT, 7n],
+    });
+    const padded = (validData + "deadbeef") as `0x${string}`;
+    const decoded = decodeCalldata("ethereum", UNCURATED_DESTINATION, padded, "0");
+    expect(decoded.source).toBe("none");
+    expect(decoded.functionName).toBe("unknown");
   });
 });
