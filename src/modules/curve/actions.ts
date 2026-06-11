@@ -267,9 +267,8 @@ function indexOfTokenInCoins(
     token === "native"
       ? CURVE_NATIVE_ETH_SENTINEL
       : token.toLowerCase();
-  for (let i = 0; i < coins.length; i++) {
-    if (coins[i].toLowerCase() === target) return i;
-  }
+  const idx = coins.findIndex((c) => c.toLowerCase() === target);
+  if (idx !== -1) return idx;
   if (token === "native") {
     throw new Error(
       `Pool does not accept native ETH (no \`coins(i)\` returns the ETH sentinel ` +

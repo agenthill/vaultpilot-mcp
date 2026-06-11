@@ -82,10 +82,7 @@ export async function getCurvePositions(
   const perPool: Map<
     number,
     { lp: bigint; gaugeBal: bigint; gaugeClaim: bigint }
-  > = new Map();
-  for (let i = 0; i < pools.length; i++) {
-    perPool.set(i, { lp: 0n, gaugeBal: 0n, gaugeClaim: 0n });
-  }
+  > = new Map(pools.map((_, i) => [i, { lp: 0n, gaugeBal: 0n, gaugeClaim: 0n }]));
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const slot = slots[i];
