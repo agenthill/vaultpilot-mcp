@@ -113,7 +113,8 @@ function decodeBip137(signature: string): {
   else if (header >= 35 && header <= 38) addressType = "p2sh-segwit";
   else if (header >= 39 && header <= 42) addressType = "segwit";
   else return null;
-  const base = addressType === "legacy" ? 31 : addressType === "p2sh-segwit" ? 35 : 39;
+  const baseByType = { legacy: 31, "p2sh-segwit": 35, segwit: 39 } as const;
+  const base = baseByType[addressType];
   const recid = ((header - base) & 1) as 0 | 1;
   return {
     recid,
