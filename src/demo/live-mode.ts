@@ -118,10 +118,7 @@ export function setLivePersona(personaId: string): Persona {
       evm: persona.addresses.evm.length > 0 ? resolved : null,
       solana: persona.addresses.solana.length > 0 ? resolved : null,
       tron: persona.addresses.tron.length > 0 ? resolved : null,
-      bitcoin:
-        persona.addresses.bitcoin && persona.addresses.bitcoin.length > 0
-          ? resolved
-          : null,
+      bitcoin: (persona.addresses.bitcoin?.length ?? 0) > 0 ? resolved : null,
     },
     addresses: {
       evm: [...persona.addresses.evm],

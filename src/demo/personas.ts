@@ -485,28 +485,12 @@ function buildPersonaAddresses(type: DemoType): PersonaAddresses {
   };
 }
 
-export const PERSONAS: Record<PersonaId, Persona> = {
-  whale: {
-    id: "whale",
-    description: PERSONA_DESCRIPTIONS.whale,
-    addresses: buildPersonaAddresses("whale"),
-  },
-  "defi-degen": {
-    id: "defi-degen",
-    description: PERSONA_DESCRIPTIONS["defi-degen"],
-    addresses: buildPersonaAddresses("defi-degen"),
-  },
-  "stable-saver": {
-    id: "stable-saver",
-    description: PERSONA_DESCRIPTIONS["stable-saver"],
-    addresses: buildPersonaAddresses("stable-saver"),
-  },
-  "staking-maxi": {
-    id: "staking-maxi",
-    description: PERSONA_DESCRIPTIONS["staking-maxi"],
-    addresses: buildPersonaAddresses("staking-maxi"),
-  },
-};
+export const PERSONAS: Record<PersonaId, Persona> = Object.fromEntries(
+  DEMO_TYPES.map((type) => [
+    type,
+    { id: type, description: PERSONA_DESCRIPTIONS[type], addresses: buildPersonaAddresses(type) },
+  ]),
+) as Record<PersonaId, Persona>;
 
 export const PERSONA_IDS: PersonaId[] = DEMO_TYPES;
 
