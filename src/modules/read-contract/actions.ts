@@ -120,7 +120,7 @@ export async function readContract(args: ReadContractArgs): Promise<ReadContract
   }
 
   const fnEntry = resolveFunctionEntry(abi, args.fn);
-  const callArgs = args.args;
+  const callArgs = args.args ?? [];
 
   const client = getClient(chain);
 
@@ -154,6 +154,7 @@ export async function readContract(args: ReadContractArgs): Promise<ReadContract
     resultRaw = raw.data;
   } catch {
     // Best-effort; if the second call fails, ship the result we have.
+    resultRaw = undefined;
   }
 
   return {

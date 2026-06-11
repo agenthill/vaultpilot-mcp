@@ -319,7 +319,11 @@ export type GetDemoWalletResponse =
     };
 
 export function buildGetDemoWalletResponse(): GetDemoWalletResponse {
-  const personas: PersonaSummary[] = Object.values(PERSONAS);
+  const personas: PersonaSummary[] = Object.values(PERSONAS).map((p) => ({
+    id: p.id,
+    description: p.description,
+    addresses: p.addresses,
+  }));
   const matrix = buildMatrixView();
   const reason = getDemoModeReason();
   const envState = getDemoModeEnvState();

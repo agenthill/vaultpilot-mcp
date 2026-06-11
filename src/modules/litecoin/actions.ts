@@ -155,7 +155,15 @@ function normalizeWallets(arg: string | string[]): string[] {
       "`wallet` must be a paired Litecoin address or a non-empty array of paired addresses.",
     );
   }
-  return [...new Set(list)];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const w of list) {
+    if (!seen.has(w)) {
+      seen.add(w);
+      out.push(w);
+    }
+  }
+  return out;
 }
 
 export async function buildLitecoinNativeSend(
@@ -367,6 +375,9 @@ export async function buildLitecoinNativeSend(
   });
 
   const sourceTotals = new Map<string, { sats: bigint; count: number }>();
+  for (const w of wallets) {
+    sourceTotals.set(w, { sats: 0n, count: 0 });
+  }
   for (let i = 0; i < selection.inputs.length; i++) {
     const acc = sourceTotals.get(inputSources[i]);
     if (!acc) continue;
