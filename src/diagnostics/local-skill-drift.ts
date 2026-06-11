@@ -160,16 +160,8 @@ export function getLocalSkillDriftNotice(): string | null {
   }
   driftNoticeEmitted = true;
   return result.status === "version-stale"
-    ? renderVersionStaleNotice({
-        pinnedHash: result.pinnedHash,
-        localHash: result.localHash,
-        pinnedVersion: result.pinnedVersion,
-        localVersion: result.localVersion,
-      })
-    : renderContentMismatchNotice({
-        pinnedHash: result.pinnedHash,
-        localHash: result.localHash,
-      });
+    ? renderVersionStaleNotice(result)
+    : renderContentMismatchNotice(result);
 }
 
 /**
