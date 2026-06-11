@@ -397,9 +397,10 @@ function signatureOf(item: AbiFunction): string {
  * destination trust is NOT — the partial source label IS the warning.
  *
  * Each entry's `abi` is a single-function ABI tuple ready for
- * `decodeFunctionData`. We assert the selector matches at module load
- * (see `assertSelectorMatches` below) so a mistyped selector or signature
- * fails fast at server startup instead of silently mis-decoding.
+ * `decodeFunctionData`. The `selector` and `signature` are kept in sync by
+ * hand; the per-entry decode tests pin each selector against its calldata
+ * (`expect(data.slice(0, 10)).toBe(selector)`), so a mistyped selector or
+ * signature fails in CI rather than silently mis-decoding.
  */
 interface HighRiskSelector {
   selector: `0x${string}`;
