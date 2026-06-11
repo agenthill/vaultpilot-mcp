@@ -100,13 +100,16 @@ export async function decodeCallArgs(
     } catch {
       continue;
     }
-    return {
+    const result: ExplainTxDecodedCall = {
       selector,
       signature: sig,
       args: args.map(jsonifyArg),
-      ...(ambiguous ? { ambiguous: true } : {}),
     };
+    if (ambiguous) result.ambiguous = true;
+    return result;
   }
 
-  return { selector, ...(ambiguous ? { ambiguous: true } : {}) };
+  const fallback: ExplainTxDecodedCall = { selector };
+  if (ambiguous) fallback.ambiguous = true;
+  return fallback;
 }

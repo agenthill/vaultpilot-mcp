@@ -66,16 +66,14 @@ export function applyHeuristics(
       if (abs > largestAbsValueUsd) largestAbsValueUsd = abs;
     }
     // Dust outflow rule.
-    if (
-      typeof b.valueUsd === "number" &&
-      b.deltaApprox < 0 &&
-      Math.abs(b.valueUsd) > 0 &&
-      Math.abs(b.valueUsd) < 0.01
-    ) {
-      out.push({
-        rule: "dust_transfer",
-        message: `Dust outflow: ${b.delta} ${b.symbol} (~${b.valueUsd.toFixed(4)} USD). Sub-cent transfers can be address-poisoning bait — verify the recipient was intended.`,
-      });
+    if (typeof b.valueUsd === "number" && b.deltaApprox < 0) {
+      const absUsd = Math.abs(b.valueUsd);
+      if (absUsd > 0 && absUsd < 0.01) {
+        out.push({
+          rule: "dust_transfer",
+          message: `Dust outflow: ${b.delta} ${b.symbol} (~${b.valueUsd.toFixed(4)} USD). Sub-cent transfers can be address-poisoning bait — verify the recipient was intended.`,
+        });
+      }
     }
   }
 
@@ -113,7 +111,7 @@ export function applyHeuristics(
 
   // No-state-change rule: success but no balance changes AND no
   // approval changes AND no event steps.
-  const hasEvents = result.steps.some((s: ExplainTxStep) => s.kind === "event");
+  const hasEvents = result.steps.some((s) => s.kind === "event");
   if (
     result.status === "success" &&
     result.balanceChanges.length === 0 &&
