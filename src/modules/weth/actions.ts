@@ -45,30 +45,26 @@ export async function buildWethUnwrap(p: WethUnwrapParams): Promise<UnsignedTx> 
   const weth = getWethAddress(p.chain);
   const client = getClient(p.chain);
 
+  const balance = (await client.readContract({
+    address: weth,
+    abi: wethAbi,
+    functionName: "balanceOf",
+    args: [p.wallet],
+  })) as bigint;
+
   let amountWei: bigint;
   let displayAmount: string;
 
   if (p.amount === "max") {
-    amountWei = (await client.readContract({
-      address: weth,
-      abi: wethAbi,
-      functionName: "balanceOf",
-      args: [p.wallet],
-    })) as bigint;
-    if (amountWei === 0n) {
+    if (balance === 0n) {
       throw new Error(
         `Cannot unwrap: wallet ${p.wallet} holds 0 WETH on ${p.chain}.`,
       );
     }
-    displayAmount = formatUnits(amountWei, 18);
+    amountWei = balance;
+    displayAmount = formatUnits(balance, 18);
   } else {
     amountWei = parseEther(p.amount);
-    const balance = (await client.readContract({
-      address: weth,
-      abi: wethAbi,
-      functionName: "balanceOf",
-      args: [p.wallet],
-    })) as bigint;
     if (balance < amountWei) {
       throw new Error(
         `Insufficient WETH: wallet ${p.wallet} has ${formatUnits(balance, 18)} WETH on ${p.chain}, ` +
