@@ -79,6 +79,15 @@ function decodeBase58(s: string): Uint8Array {
   return new Uint8Array(bytes.reverse());
 }
 
+/** Read an 8-byte little-endian u64 from `bytes` starting at `offset`. */
+function readLeU64(bytes: Uint8Array, offset: number): bigint {
+  let value = 0n;
+  for (let i = offset + 7; i >= offset; i--) {
+    value = (value << 8n) | BigInt(bytes[i]);
+  }
+  return value;
+}
+
 /**
  * Classify a System Program instruction. Returns `{ kind: "transfer", lamports }`
  * for the transfer case (the only one `history/solana.ts` surfaces as an
@@ -97,11 +106,7 @@ export function decodeSystemInstruction(
     if (variant === SYSTEM_IX.TRANSFER) {
       if (bytes.length < 12) return { kind: "other", variantCode: variant };
       // 8 bytes LE u64 after the 4-byte variant tag.
-      let lamports = 0n;
-      for (let i = 11; i >= 4; i--) {
-        lamports = (lamports << 8n) | BigInt(bytes[i]);
-      }
-      return { kind: "transfer", lamports };
+      return { kind: "transfer", lamports: readLeU64(bytes, 4) };
     }
     return { kind: "other", variantCode: variant };
   } catch {
@@ -128,15 +133,10 @@ export function decodeTokenInstruction(
     if (bytes.length < 1) return { kind: "other", variantCode: -1 };
     const variant = bytes[0];
     if (variant === TOKEN_IX.TRANSFER && bytes.length >= 9) {
-      let amount = 0n;
-      for (let i = 8; i >= 1; i--) amount = (amount << 8n) | BigInt(bytes[i]);
-      return { kind: "transfer", amount };
+      return { kind: "transfer", amount: readLeU64(bytes, 1) };
     }
     if (variant === TOKEN_IX.TRANSFER_CHECKED && bytes.length >= 10) {
-      let amount = 0n;
-      for (let i = 8; i >= 1; i--) amount = (amount << 8n) | BigInt(bytes[i]);
-      const decimals = bytes[9];
-      return { kind: "transferChecked", amount, decimals };
+      return { kind: "transferChecked", amount: readLeU64(bytes, 1), decimals: bytes[9] };
     }
     return { kind: "other", variantCode: variant };
   } catch {
@@ -165,9 +165,7 @@ export function decodeStakeInstruction(
     if (variant === STAKE_IX.DEACTIVATE) return { kind: "deactivate" };
     if (variant === STAKE_IX.WITHDRAW) {
       if (bytes.length < 12) return { kind: "other", variantCode: variant };
-      let lamports = 0n;
-      for (let i = 11; i >= 4; i--) lamports = (lamports << 8n) | BigInt(bytes[i]);
-      return { kind: "withdraw", lamports };
+      return { kind: "withdraw", lamports: readLeU64(bytes, 4) };
     }
     return { kind: "other", variantCode: variant };
   } catch {

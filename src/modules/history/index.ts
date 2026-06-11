@@ -145,6 +145,12 @@ export async function getTransactionHistory(
     }
   }
 
+  // Resolve the DefiLlama coin key for a Solana balance-delta token.
+  // SOL deltas use the native coin key; SPL deltas use the mint address.
+  function deltaCoinKey(token: string): string {
+    return token === "SOL" ? nativeCoinKey(chain) : tokenCoinKey(chain, token);
+  }
+
   // Build price requests.
   const priceRequests: PriceRequest[] = [];
   for (const item of items) {
@@ -158,14 +164,9 @@ export async function getTransactionHistory(
         timestamp: item.timestamp,
       });
     } else {
-      // program_interaction (Solana): price every balance delta. SOL deltas
-      // use the native coin key; SPL deltas use the mint address.
+      // program_interaction (Solana): price every balance delta.
       for (const d of item.balanceDeltas) {
-        const coinKey =
-          d.token === "SOL"
-            ? nativeCoinKey(chain)
-            : tokenCoinKey(chain, d.token);
-        priceRequests.push({ coinKey, timestamp: item.timestamp });
+        priceRequests.push({ coinKey: deltaCoinKey(d.token), timestamp: item.timestamp });
       }
     }
   }
@@ -198,9 +199,7 @@ export async function getTransactionHistory(
         // program_interaction: price each delta. amountFormatted is signed
         // ("+200" or "-1.5"); Number() parses both.
         for (const d of item.balanceDeltas) {
-          const coinKey =
-            d.token === "SOL" ? nativeCoinKey(chain) : tokenCoinKey(chain, d.token);
-          const p = getPrice(prices, coinKey, item.timestamp);
+          const p = getPrice(prices, deltaCoinKey(d.token), item.timestamp);
           if (p !== undefined) {
             const amt = Number(d.amountFormatted);
             if (Number.isFinite(amt)) {

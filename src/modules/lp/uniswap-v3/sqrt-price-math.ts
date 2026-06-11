@@ -66,6 +66,14 @@ export function encodeSqrtRatioX96(
   return sqrtBigInt(ratioX192);
 }
 
+/** Ensure sqrtRatioA ≤ sqrtRatioB; swaps in-place if needed. */
+function sortSqrtRatios(
+  a: bigint,
+  b: bigint,
+): [bigint, bigint] {
+  return a <= b ? [a, b] : [b, a];
+}
+
 /**
  * Δamount0 across a price range, rounded up. Used at mint time to
  * determine how much token0 the position needs.
@@ -77,9 +85,7 @@ export function getAmount0DeltaRoundUp(
   sqrtRatioBX96: bigint,
   liquidity: bigint,
 ): bigint {
-  if (sqrtRatioAX96 > sqrtRatioBX96) {
-    [sqrtRatioAX96, sqrtRatioBX96] = [sqrtRatioBX96, sqrtRatioAX96];
-  }
+  [sqrtRatioAX96, sqrtRatioBX96] = sortSqrtRatios(sqrtRatioAX96, sqrtRatioBX96);
   const numerator1 = liquidity << 96n;
   const numerator2 = sqrtRatioBX96 - sqrtRatioAX96;
   // Two nested mulDivRoundingUp calls — first divides by sqrtRatioBX96,
@@ -100,9 +106,7 @@ export function getAmount1DeltaRoundUp(
   sqrtRatioBX96: bigint,
   liquidity: bigint,
 ): bigint {
-  if (sqrtRatioAX96 > sqrtRatioBX96) {
-    [sqrtRatioAX96, sqrtRatioBX96] = [sqrtRatioBX96, sqrtRatioAX96];
-  }
+  [sqrtRatioAX96, sqrtRatioBX96] = sortSqrtRatios(sqrtRatioAX96, sqrtRatioBX96);
   return mulDivRoundingUp(liquidity, sqrtRatioBX96 - sqrtRatioAX96, Q96);
 }
 
@@ -118,9 +122,7 @@ export function getAmount0DeltaRoundDown(
   sqrtRatioBX96: bigint,
   liquidity: bigint,
 ): bigint {
-  if (sqrtRatioAX96 > sqrtRatioBX96) {
-    [sqrtRatioAX96, sqrtRatioBX96] = [sqrtRatioBX96, sqrtRatioAX96];
-  }
+  [sqrtRatioAX96, sqrtRatioBX96] = sortSqrtRatios(sqrtRatioAX96, sqrtRatioBX96);
   const numerator1 = liquidity << 96n;
   const numerator2 = sqrtRatioBX96 - sqrtRatioAX96;
   // Round-down: integer divide; no rounding-up correction.
@@ -136,8 +138,6 @@ export function getAmount1DeltaRoundDown(
   sqrtRatioBX96: bigint,
   liquidity: bigint,
 ): bigint {
-  if (sqrtRatioAX96 > sqrtRatioBX96) {
-    [sqrtRatioAX96, sqrtRatioBX96] = [sqrtRatioBX96, sqrtRatioAX96];
-  }
+  [sqrtRatioAX96, sqrtRatioBX96] = sortSqrtRatios(sqrtRatioAX96, sqrtRatioBX96);
   return (liquidity * (sqrtRatioBX96 - sqrtRatioAX96)) / Q96;
 }

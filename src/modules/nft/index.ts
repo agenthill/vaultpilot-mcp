@@ -392,7 +392,7 @@ function projectCollection(
 ): NftCollectionInfo {
   const floor = c.floorAsk?.price;
   const topBid = c.topBid?.price;
-  const info: NftCollectionInfo = {
+  return {
     chain,
     contractAddress,
     ...(c.name ? { name: c.name } : {}),
@@ -437,7 +437,6 @@ function projectCollection(
       : {}),
     notes: [],
   };
-  return info;
 }
 
 export async function getNftCollection(
@@ -613,8 +612,7 @@ function projectActivity(
   chain: SupportedChain,
   a: ReservoirActivityItem,
 ): NftHistoryItem {
-  const type =
-    ACTIVITY_TYPE_MAP[a.type as keyof typeof ACTIVITY_TYPE_MAP] ?? "other";
+  const type = ACTIVITY_TYPE_MAP[a.type] ?? "other";
   const priceEth = a.price?.amount?.decimal;
   const priceUsd = a.price?.amount?.usd;
   return {
@@ -711,12 +709,8 @@ export async function getNftHistory(
 
   // Merge desc by timestamp; truncate to the requested limit.
   items.sort((a, b) => b.timestamp - a.timestamp);
-  let truncated = false;
-  let finalItems = items;
-  if (items.length > limit) {
-    finalItems = items.slice(0, limit);
-    truncated = true;
-  }
+  const truncated = items.length > limit;
+  const finalItems = truncated ? items.slice(0, limit) : items;
 
   const notes: string[] = [];
   if (rateLimitedAny) notes.push(RESERVOIR_SETUP_HINT);

@@ -208,10 +208,10 @@ export function getToolScope(name: string): { family?: ChainFamily; protocol?: P
     name === "sign_message_btc" ||
     name === "register_btc_multisig_wallet" ||
     name === "unregister_btc_multisig_wallet" ||
-    name === "rescan_btc_account"
+    name === "rescan_btc_account" ||
+    name === "pair_ledger_btc"
   )
     return { family: "btc" };
-  if (name === "pair_ledger_btc") return { family: "btc" };
 
   // ----- Litecoin, family-only -----
   if (

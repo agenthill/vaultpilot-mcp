@@ -17,6 +17,7 @@ import type {
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const SERVER_ROW_CAP = 100;
 const MAX_SYMBOL_LEN = 32;
+const PHISHING_PATTERN = /https?|www\.|claim|visit|airdrop|\.com|\.io|\.app|\.xyz|\.net/;
 
 const KNOWN_TOKEN_DECIMALS: Record<string, number> = {
   [TRON_TOKENS.USDT]: 6,
@@ -174,9 +175,7 @@ export async function fetchTronHistory(args: {
     // token_info.symbol is the phishing surface we care about.
     const rawSymbol = row.token_info?.symbol ?? "";
     const rawSymbolLower = rawSymbol.toLowerCase();
-    if (/https?|www\.|claim|visit|airdrop|\.com|\.io|\.app|\.xyz|\.net/.test(rawSymbolLower)) {
-      continue;
-    }
+    if (PHISHING_PATTERN.test(rawSymbolLower)) continue;
     const canonicalSymbol = KNOWN_TOKEN_SYMBOLS[contract];
     const tokenSymbol =
       canonicalSymbol ?? (sanitizeDisplayString(rawSymbol, MAX_SYMBOL_LEN) || "UNKNOWN");

@@ -78,7 +78,7 @@ function projectBalance(
     return base;
   }
   base.priceUsd = priceUsd;
-  const confirmedLtcNum = Number(litoshisToLtcString(raw.confirmedSats));
+  const confirmedLtcNum = Number(base.confirmedLtc);
   if (Number.isFinite(confirmedLtcNum)) {
     base.valueUsd = Math.round(confirmedLtcNum * priceUsd * 100) / 100;
   }

@@ -99,19 +99,17 @@ export async function getSolanaIncidentFeed(): Promise<SolanaFeedResult> {
       };
     }
     const validated = json.filter(isValidIncidentRecord);
-    if (validated.length !== json.length) {
-      const dropped = json.length - validated.length;
-      cache = { records: validated, fetchedAt: now };
-      return {
-        records: validated,
-        feedAvailable: true,
-        feedUrl: url,
-        feedFetchedAt: now,
-        feedReason: `${dropped}/${json.length} feed entries failed schema validation and were dropped`,
-      };
-    }
+    const dropped = json.length - validated.length;
     cache = { records: validated, fetchedAt: now };
-    return { records: validated, feedAvailable: true, feedUrl: url, feedFetchedAt: now };
+    return {
+      records: validated,
+      feedAvailable: true,
+      feedUrl: url,
+      feedFetchedAt: now,
+      ...(dropped > 0
+        ? { feedReason: `${dropped}/${json.length} feed entries failed schema validation and were dropped` }
+        : {}),
+    };
   } catch (err) {
     return {
       records: cache?.records ?? [],

@@ -40,6 +40,14 @@ const EVM_CHAINS: ReadonlyArray<SupportedChain> = [
   "optimism",
 ];
 
+/** Per-asset EVM token-registry key + wire properties. */
+const EVM_ASSET_SPEC: Record<string, { tokenKey: string; decimals: number; isWrappedNative?: true }> = {
+  USDC: { tokenKey: "USDC", decimals: 6 },
+  USDT: { tokenKey: "USDT", decimals: 6 },
+  ETH:  { tokenKey: "WETH", decimals: 18, isWrappedNative: true },
+  BTC:  { tokenKey: "WBTC", decimals: 8,  isWrappedNative: true },
+};
+
 /**
  * Resolve `(asset, chain)` to the canonical address + decimals on that
  * chain. Returns `null` when the asset isn't deployed on the chain
@@ -60,16 +68,13 @@ export function resolveAsset(
   if (asset === "stables") return null; // expand first via expandStables()
 
   if (chain === "solana") {
-    if (asset === "USDC") {
-      return { symbol: "USDC", address: SOLANA_TOKENS.USDC, decimals: 6 };
-    }
-    if (asset === "USDT") {
-      return { symbol: "USDT", address: SOLANA_TOKENS.USDT, decimals: 6 };
-    }
     if (asset === "SOL") {
       // SOL is native; lending protocols on Solana expose it directly
       // (no wrapping). The address `null` signals "native asset".
       return { symbol: "SOL", address: null, decimals: 9 };
+    }
+    if (asset === "USDC" || asset === "USDT") {
+      return { symbol: asset, address: SOLANA_TOKENS[asset], decimals: 6 };
     }
     return null;
   }
@@ -83,30 +88,18 @@ export function resolveAsset(
 
   // EVM chain
   if (!EVM_CHAINS.includes(chain as SupportedChain)) return null;
-  const evmChain = chain as SupportedChain;
-  const tokens = CONTRACTS[evmChain].tokens as Record<string, string>;
+  const tokens = CONTRACTS[chain as SupportedChain].tokens as Record<string, string>;
 
-  if (asset === "USDC") {
-    const addr = tokens.USDC;
-    if (!addr) return null;
-    return { symbol: "USDC", address: addr, decimals: 6 };
-  }
-  if (asset === "USDT") {
-    const addr = tokens.USDT;
-    if (!addr) return null;
-    return { symbol: "USDT", address: addr, decimals: 6 };
-  }
-  if (asset === "ETH") {
-    const addr = tokens.WETH;
-    if (!addr) return null;
-    return { symbol: "ETH", address: addr, decimals: 18, isWrappedNative: true };
-  }
-  if (asset === "BTC") {
-    const addr = tokens.WBTC;
-    if (!addr) return null;
-    return { symbol: "BTC", address: addr, decimals: 8, isWrappedNative: true };
-  }
-  return null;
+  const spec = EVM_ASSET_SPEC[asset];
+  if (!spec) return null;
+  const addr = tokens[spec.tokenKey];
+  if (!addr) return null;
+  return {
+    symbol: asset,
+    address: addr,
+    decimals: spec.decimals,
+    ...(spec.isWrappedNative ? { isWrappedNative: true } : {}),
+  };
 }
 
 /**

@@ -99,7 +99,7 @@ export function analyzeTool(tool: ToolDescriptor): ToolCostRow {
     descriptionBytes,
     inputSchemaBytes,
     totalBytes,
-    approxTokens: approxTokens("x".repeat(totalChars)),
+    approxTokens: Math.ceil(totalChars / 4),
   };
 }
 

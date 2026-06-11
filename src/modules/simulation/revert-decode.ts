@@ -137,13 +137,14 @@ function tryDecodeKnown(data: `0x${string}`): DecodedRevert | undefined {
   try {
     const decoded = decodeErrorResult({ abi: KNOWN_ERROR_ABIS, data });
     const args = decoded.args ? (decoded.args as readonly unknown[]).map(stringifyArg) : undefined;
+    const hint = hintFor(decoded.errorName);
     return {
       errorName: decoded.errorName,
       args,
-      hint: hintFor(decoded.errorName),
+      hint,
       data,
       source: "local-abi",
-      message: formatMessage(decoded.errorName, args, hintFor(decoded.errorName)),
+      message: formatMessage(decoded.errorName, args, hint),
     };
   } catch {
     return undefined;

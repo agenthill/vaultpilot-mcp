@@ -498,22 +498,15 @@ export async function listContacts(
     const byLabel = new Map<string, ListedContact>();
     for (const row of rows) {
       const existing = byLabel.get(row.label);
-      const earlierAddedAt =
-        existing && existing.addedAt < row.addedAt ? existing.addedAt : row.addedAt;
+      const notes = row.notes ?? existing?.notes;
+      const tags = row.tags ?? existing?.tags;
+      const addedAt = existing && existing.addedAt < row.addedAt ? existing.addedAt : row.addedAt;
       byLabel.set(row.label, {
         label: row.label,
         addresses: { ...(existing?.addresses ?? {}), [row.chain]: row.address },
-        ...(row.notes !== undefined
-          ? { notes: row.notes }
-          : existing?.notes !== undefined
-            ? { notes: existing.notes }
-            : {}),
-        ...(row.tags !== undefined
-          ? { tags: row.tags }
-          : existing?.tags !== undefined
-            ? { tags: existing.tags }
-            : {}),
-        addedAt: earlierAddedAt,
+        ...(notes !== undefined ? { notes } : {}),
+        ...(tags !== undefined ? { tags } : {}),
+        addedAt,
         unsigned: true,
       });
     }
@@ -574,10 +567,9 @@ export async function listContacts(
   });
   for (const row of unsignedRows) {
     const existing = byLabel.get(row.label);
-    const earlierAddedAt =
-      existing && existing.addedAt < row.addedAt
-        ? existing.addedAt
-        : row.addedAt;
+    const notes = row.notes ?? existing?.notes;
+    const tags = row.tags ?? existing?.tags;
+    const addedAt = existing && existing.addedAt < row.addedAt ? existing.addedAt : row.addedAt;
     const newAddresses = {
       ...(existing?.addresses ?? {}),
       // In-memory wins ONLY for chains the disk doesn't already cover —
@@ -590,17 +582,9 @@ export async function listContacts(
     byLabel.set(row.label, {
       label: row.label,
       addresses: newAddresses,
-      ...(row.notes !== undefined
-        ? { notes: row.notes }
-        : existing?.notes !== undefined
-          ? { notes: existing.notes }
-          : {}),
-      ...(row.tags !== undefined
-        ? { tags: row.tags }
-        : existing?.tags !== undefined
-          ? { tags: existing.tags }
-          : {}),
-      addedAt: earlierAddedAt,
+      ...(notes !== undefined ? { notes } : {}),
+      ...(tags !== undefined ? { tags } : {}),
+      addedAt,
       unsigned: true,
     });
   }

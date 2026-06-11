@@ -125,7 +125,7 @@ async function loadNonceContext(walletStr: string): Promise<{
   const noncePubkey = await deriveNonceAccountAddress(fromPubkey);
   const nonceState = await getNonceAccountValue(conn, noncePubkey);
   if (!nonceState) throwNonceRequired(walletStr);
-  return { fromPubkey, noncePubkey, nonceValue: nonceState!.nonce };
+  return { fromPubkey, noncePubkey, nonceValue: nonceState.nonce };
 }
 
 /**

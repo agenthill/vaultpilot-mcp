@@ -113,33 +113,12 @@ function readPairings(): PairingSummary[] {
   }
   if (!cfg?.pairings) return [];
   const out: PairingSummary[] = [];
-  if (cfg.pairings.solana && cfg.pairings.solana.length > 0) {
-    out.push({
-      chain: "solana",
-      count: cfg.pairings.solana.length,
-      addresses: cfg.pairings.solana.map((p) => p.address),
-    });
-  }
-  if (cfg.pairings.tron && cfg.pairings.tron.length > 0) {
-    out.push({
-      chain: "tron",
-      count: cfg.pairings.tron.length,
-      addresses: cfg.pairings.tron.map((p) => p.address),
-    });
-  }
-  if (cfg.pairings.bitcoin && cfg.pairings.bitcoin.length > 0) {
-    out.push({
-      chain: "bitcoin",
-      count: cfg.pairings.bitcoin.length,
-      addresses: cfg.pairings.bitcoin.map((p) => p.address),
-    });
-  }
-  if (cfg.pairings.litecoin && cfg.pairings.litecoin.length > 0) {
-    out.push({
-      chain: "litecoin",
-      count: cfg.pairings.litecoin.length,
-      addresses: cfg.pairings.litecoin.map((p) => p.address),
-    });
+  const chains = ["solana", "tron", "bitcoin", "litecoin"] as const;
+  for (const chain of chains) {
+    const entries = cfg.pairings[chain];
+    if (entries && entries.length > 0) {
+      out.push({ chain, count: entries.length, addresses: entries.map((p) => p.address) });
+    }
   }
   return out;
 }
@@ -263,7 +242,7 @@ export async function buildIncidentReport(
   const notices = {
     preflight_skill_installed: isPreflightSkillInstalled(),
     setup_skill_installed: isSetupSkillInstalled(),
-    skill_pin_drift_status: driftResult ? driftResult.status : null,
+    skill_pin_drift_status: driftResult?.status ?? null,
   };
 
   // ---------- Optional wallet-context evidence ----------

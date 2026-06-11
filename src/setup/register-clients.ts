@@ -233,14 +233,16 @@ export function registerVaultPilotWithClients(
 export function summarizePatchResults(results: ClientPatchResult[]): string {
   const lines: string[] = [];
   for (const r of results) {
-    const tag =
-      r.status === "added"
-        ? "✓ Added"
-        : r.status === "already-present"
-          ? "✓ Already configured"
-          : r.status === "not-detected"
-            ? "·  Not detected"
-            : "✗ Error";
+    let tag: string;
+    if (r.status === "added") {
+      tag = "✓ Added";
+    } else if (r.status === "already-present") {
+      tag = "✓ Already configured";
+    } else if (r.status === "not-detected") {
+      tag = "·  Not detected";
+    } else {
+      tag = "✗ Error";
+    }
     lines.push(`  ${tag}: ${r.client}`);
     if (r.status === "added" || r.status === "error") {
       lines.push(`      ${r.configPath}`);

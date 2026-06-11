@@ -144,9 +144,7 @@ export function annotatePoisoning(
     }
 
     if (reasons.length > 0) {
-      item.suspectedPoisoning = mimics
-        ? { reasons, mimics }
-        : { reasons };
+      item.suspectedPoisoning = { reasons, ...(mimics ? { mimics } : {}) };
     }
   }
 }

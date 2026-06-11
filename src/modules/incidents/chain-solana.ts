@@ -37,10 +37,10 @@ import {
   KNOWN_PROGRAM_IDS,
   KNOWN_PYTH_FEEDS,
   KNOWN_SOLANA_INCIDENTS,
+  KNOWN_SQUADS_GOVERNED_PROGRAMS,
 } from "./solana-known.js";
 import { getSolanaIncidentFeed } from "./solana-feed.js";
 import { scanSquadsPendingUpgrades } from "./squads-pending.js";
-import { KNOWN_SQUADS_GOVERNED_PROGRAMS } from "./solana-known.js";
 import {
   getExtensionTypes,
   getMint,

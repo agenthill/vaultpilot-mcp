@@ -218,17 +218,29 @@ async function configureRpc(p: Prompt): Promise<UserConfig["rpc"]> {
   throw new Error(`Could not validate ${provider} API key after 3 attempts.`);
 }
 
+/**
+ * Ask for an optional API key or URL. If the user presses enter without
+ * typing anything and there is an existing value, returns the existing value.
+ * Returns undefined when the user explicitly clears or skips the field.
+ */
+async function askOptionalKey(
+  p: Prompt,
+  label: string,
+  existing: string | undefined,
+): Promise<string | undefined> {
+  const prompt = existing
+    ? `${label} [press enter to keep existing]: `
+    : `${label} (or blank to skip): `;
+  const answer = await p.ask(prompt);
+  if (!answer && existing) return existing;
+  return answer || undefined;
+}
+
 async function configureEtherscan(p: Prompt): Promise<string | undefined> {
   console.log("\n--- Etherscan (optional) ---");
   console.log("Improves contract-verification tools. Skip with empty input.");
   const existing = readUserConfig()?.etherscanApiKey;
-  const answer = await p.ask(
-    existing
-      ? "Etherscan API key [press enter to keep existing]: "
-      : "Etherscan API key (or blank to skip): "
-  );
-  if (!answer && existing) return existing;
-  return answer || undefined;
+  return askOptionalKey(p, "Etherscan API key", existing);
 }
 
 async function configureOneInch(p: Prompt): Promise<string | undefined> {
@@ -237,13 +249,7 @@ async function configureOneInch(p: Prompt): Promise<string | undefined> {
   // hunt through nav. Marketing pages are also click-wastage for this audience.
   console.log("Create a free key at https://portal.1inch.dev/dashboard/api/keys. Skip with empty input.");
   const existing = readUserConfig()?.oneInchApiKey;
-  const answer = await p.ask(
-    existing
-      ? "1inch API key [press enter to keep existing]: "
-      : "1inch API key (or blank to skip): "
-  );
-  if (!answer && existing) return existing;
-  return answer || undefined;
+  return askOptionalKey(p, "1inch API key", existing);
 }
 
 async function configureSafe(p: Prompt): Promise<string | undefined> {
@@ -254,13 +260,7 @@ async function configureSafe(p: Prompt): Promise<string | undefined> {
   console.log("use Safe.");
   console.log("Create a free key at https://developer.safe.global/.");
   const existing = readUserConfig()?.safeApiKey;
-  const answer = await p.ask(
-    existing
-      ? "Safe API key [press enter to keep existing]: "
-      : "Safe API key (or blank to skip): "
-  );
-  if (!answer && existing) return existing;
-  return answer || undefined;
+  return askOptionalKey(p, "Safe API key", existing);
 }
 
 async function validateTronApiKey(apiKey: string): Promise<void> {
@@ -420,13 +420,7 @@ async function configureWalletConnect(p: Prompt): Promise<string | undefined> {
   // the main dashboard manually.
   console.log("Create a free project at https://cloud.reown.com/app/new-project.");
   const existing = readUserConfig()?.walletConnect?.projectId;
-  const answer = await p.ask(
-    existing
-      ? "WalletConnect project ID [press enter to keep existing]: "
-      : "WalletConnect project ID (or blank to skip): "
-  );
-  if (!answer && existing) return existing;
-  return answer || undefined;
+  return askOptionalKey(p, "WalletConnect project ID", existing);
 }
 
 async function pairLedgerLiveFlow(p: Prompt): Promise<void> {
@@ -519,15 +513,15 @@ function summarizeConfig(cfg: UserConfig): void {
   console.log(`  1inch API key:       ${cfg.oneInchApiKey ? "set" : "not set"}`);
   console.log(`  Safe API key:        ${cfg.safeApiKey ? "set" : "not set"}`);
   console.log(`  TronGrid API key:    ${cfg.tronApiKey ? "set" : "not set"}`);
-  console.log(
-    `  Solana RPC URL:      ${
-      cfg.solanaRpcUrl
-        ? extractHeliusKey(cfg.solanaRpcUrl)
-          ? "Helius (API key set)"
-          : "custom URL set"
-        : "not set"
-    }`
-  );
+  let solanaLabel: string;
+  if (!cfg.solanaRpcUrl) {
+    solanaLabel = "not set";
+  } else if (extractHeliusKey(cfg.solanaRpcUrl)) {
+    solanaLabel = "Helius (API key set)";
+  } else {
+    solanaLabel = "custom URL set";
+  }
+  console.log(`  Solana RPC URL:      ${solanaLabel}`);
   console.log(
     `  WalletConnect:       ${cfg.walletConnect?.projectId ? "project ID set" : "not set"}`
   );

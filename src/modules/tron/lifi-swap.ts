@@ -273,9 +273,8 @@ export async function buildTronLifiSwap(
   }
 
   // Decode the TRON protobuf to extract TriggerSmartContract.
-  const rawDataHex = String(txReq.data).startsWith("0x")
-    ? String(txReq.data).slice(2)
-    : String(txReq.data);
+  const rawDataStr = String(txReq.data);
+  const rawDataHex = rawDataStr.startsWith("0x") ? rawDataStr.slice(2) : rawDataStr;
   const trigger = decodeTronTriggerSmartContract(rawDataHex);
 
   // Cross-check bridge intent on the inner ABI calldata.

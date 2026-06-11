@@ -106,6 +106,7 @@ export async function getTronTransactionStatus(txHash: string): Promise<{
       ? (info.fee / 1_000_000).toString()
       : undefined;
 
+  const surfacedReceiptResult = receiptResult || contractRet;
   return {
     chain: "tron",
     txHash: normalized,
@@ -115,6 +116,6 @@ export async function getTronTransactionStatus(txHash: string): Promise<{
     ...(info.receipt?.energy_usage_total !== undefined
       ? { energyUsed: info.receipt.energy_usage_total.toString() }
       : {}),
-    ...(receiptResult ? { receiptResult } : contractRet ? { receiptResult: contractRet } : {}),
+    ...(surfacedReceiptResult ? { receiptResult: surfacedReceiptResult } : {}),
   };
 }

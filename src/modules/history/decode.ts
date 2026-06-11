@@ -40,24 +40,19 @@ export async function resolveSelectors(
       }
       try {
         const sigs = await fetch4byteSignatures(sel);
-        if (sigs.length === 0) {
-          const res: SelectorResolution = {};
-          cache.set(key, res, SELECTOR_TTL);
-          out.set(sel, res);
-          return;
-        }
         // Take the name (part before "(") of the first candidate. 4byte
         // returns candidates ordered by created-ID; the earliest-created
         // signature is usually the canonical one, but the field is also
         // attacker-insertable, so we sanitize the name before surfacing.
-        const first = sigs[0];
-        const parenIdx = first.indexOf("(");
-        const rawName = parenIdx > 0 ? first.slice(0, parenIdx) : first;
-        const methodName = rawName.replace(/[^A-Za-z0-9_]/g, "").slice(0, 64);
-        const res: SelectorResolution = {
-          ...(methodName ? { methodName } : {}),
-          ...(sigs.length > 1 ? { ambiguous: true } : {}),
-        };
+        const res: SelectorResolution = {};
+        if (sigs.length > 0) {
+          const first = sigs[0];
+          const parenIdx = first.indexOf("(");
+          const rawName = parenIdx > 0 ? first.slice(0, parenIdx) : first;
+          const methodName = rawName.replace(/[^A-Za-z0-9_]/g, "").slice(0, 64);
+          if (methodName) res.methodName = methodName;
+          if (sigs.length > 1) res.ambiguous = true;
+        }
         cache.set(key, res, SELECTOR_TTL);
         out.set(sel, res);
       } catch {

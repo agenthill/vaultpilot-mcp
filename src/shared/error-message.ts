@@ -74,10 +74,6 @@ function stringifyOwnProps(value: unknown): string {
     if (name === "stack") continue;
     flat[name] = (value as Record<string, unknown>)[name];
   }
-  for (const k of Object.keys(value as object)) {
-    if (k in flat || k === "stack") continue;
-    flat[k] = (value as Record<string, unknown>)[k];
-  }
   if (Object.keys(flat).length === 0) return "";
   const seen = new WeakSet<object>();
   try {
@@ -85,7 +81,7 @@ function stringifyOwnProps(value: unknown): string {
       if (typeof v === "function") return undefined;
       if (typeof v === "bigint") return v.toString();
       if (v instanceof Error) {
-        return { name: v.name, message: typeof v.message === "string" ? v.message : v.message };
+        return { name: v.name, message: v.message };
       }
       if (v && typeof v === "object") {
         if (seen.has(v)) return "[circular]";

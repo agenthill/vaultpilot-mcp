@@ -29,6 +29,7 @@
 import { resolveName } from "../modules/balances/index.js";
 import {
   CONTACT_ADDRESS_PATTERNS,
+  ContactsError,
   type ContactChain,
 } from "./schemas.js";
 import {
@@ -36,6 +37,8 @@ import {
   findDemoContactByAddress,
 } from "./demo-store.js";
 import { isDemoMode } from "../demo/index.js";
+import { readContactsStrict } from "./storage.js";
+import { verifyBtcBlob, verifyEvmBlob } from "./verify.js";
 
 export type ResolutionSource =
   | "literal"
@@ -105,8 +108,6 @@ async function reverseLookup(
   // Distinguish "no blob" (file empty / chain absent) from "tampered"
   // (file present but verification failed). For "tampered" we want a
   // warning; for "no blob" we silently skip.
-  const { readContactsStrict } = await import("./storage.js");
-  const { verifyBtcBlob, verifyEvmBlob } = await import("./verify.js");
   let file;
   try {
     file = readContactsStrict();
@@ -121,13 +122,11 @@ async function reverseLookup(
   for (const entry of blob.entries) {
     const candidate = chain === "evm" ? entry.address.toLowerCase() : entry.address;
     if (candidate === target) {
-      return {
-        state: "match",
-        label: entry.label,
-        ...(entry.intendedChains !== undefined
-          ? { intendedChains: [...entry.intendedChains] }
-          : {}),
-      };
+      const result: ReverseLookupResult = { state: "match", label: entry.label };
+      if (entry.intendedChains !== undefined) {
+        return { ...result, intendedChains: [...entry.intendedChains] };
+      }
+      return result;
     }
   }
   return { state: "noMatch" };
@@ -147,13 +146,10 @@ async function forwardLookup(
   // Use a STRICT read here so tamper aborts (matches the plan).
   // tryReadVerifiedBlob silently returns null on tamper, which is
   // the wrong shape for label resolution — we want to know.
-  const { readContactsStrict } = await import("./storage.js");
-  const { ContactsError } = await import("./schemas.js");
   const file = readContactsStrict();
   const blob = file.chains[chain];
   if (!blob) return null;
   // Verify; throw the matching CONTACTS_* error on failure.
-  const { verifyBtcBlob, verifyEvmBlob } = await import("./verify.js");
   const ok = chain === "btc" ? verifyBtcBlob(blob) : await verifyEvmBlob(blob);
   if (!ok) {
     throw new Error(
@@ -163,12 +159,11 @@ async function forwardLookup(
   }
   const hit = blob.entries.find((e) => e.label === label);
   if (!hit) return null;
-  return {
-    address: hit.address,
-    ...(hit.intendedChains !== undefined
-      ? { intendedChains: [...hit.intendedChains] }
-      : {}),
-  };
+  const result: { address: string; intendedChains?: string[] } = { address: hit.address };
+  if (hit.intendedChains !== undefined) {
+    result.intendedChains = [...hit.intendedChains];
+  }
+  return result;
 }
 
 /**

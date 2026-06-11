@@ -132,13 +132,17 @@ export function buildExitDemoGuide(args: ExitDemoArgs = {}): {
 } {
   const live = getLiveWallet();
   const runtimeSolanaRpcStatus = getRuntimeSolanaRpcStatus();
+  let subMode: "default" | "live" | "not-in-demo";
+  if (!isDemoMode()) {
+    subMode = "not-in-demo";
+  } else if (isLiveMode()) {
+    subMode = "live";
+  } else {
+    subMode = "default";
+  }
   const currentState = {
     demoActive: isDemoMode(),
-    subMode: isDemoMode()
-      ? isLiveMode()
-        ? ("live" as const)
-        : ("default" as const)
-      : ("not-in-demo" as const),
+    subMode,
     activePersonaId: live?.personaId ?? null,
     runtimeSolanaRpcSet: runtimeSolanaRpcStatus.active,
     solanaPublicErrorsThisSession: getSolanaPublicErrorCount(),

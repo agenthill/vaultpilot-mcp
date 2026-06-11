@@ -15,6 +15,7 @@ import type {
 
 const SERVER_ROW_CAP = 100;
 const MAX_SYMBOL_LEN = 32;
+const PHISHING_PATTERN = /https?|www\.|claim|visit|airdrop|\.com|\.io|\.app|\.xyz|\.net/;
 
 interface TxListItem {
   hash: string;
@@ -86,8 +87,8 @@ function toTokenTransfer(t: TokenTxItem): TokenTransferHistoryItem | null {
   // one where the injection was carried in an already-dropped Unicode char.
   const rawSymbolLower = (t.tokenSymbol ?? "").toLowerCase();
   const rawNameLower = (t.tokenName ?? "").toLowerCase();
-  if (/https?|www\.|claim|visit|airdrop|\.com|\.io|\.app|\.xyz|\.net/.test(rawSymbolLower)) return null;
-  if (/https?|www\.|claim|visit|airdrop|\.com|\.io|\.app|\.xyz|\.net/.test(rawNameLower)) return null;
+  if (PHISHING_PATTERN.test(rawSymbolLower)) return null;
+  if (PHISHING_PATTERN.test(rawNameLower)) return null;
 
   const rawSymbol = sanitizeDisplayString(t.tokenSymbol, MAX_SYMBOL_LEN);
   const tokenSymbol = rawSymbol || "UNKNOWN";

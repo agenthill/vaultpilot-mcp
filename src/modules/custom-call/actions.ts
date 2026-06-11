@@ -129,13 +129,10 @@ export async function buildCustomCall(p: BuildCustomCallParams): Promise<Unsigne
   // there's no legitimate flow where the user wants to pull their own
   // tokens through allowance-spending machinery (use prepare_token_send
   // instead, which doesn't require an approval).
-  let transferFromSelfAsFrom = false;
-  if (data.toLowerCase().startsWith("0x23b872dd") && p.args.length >= 1) {
-    const fromArg = String(p.args[0] ?? "").toLowerCase();
-    if (fromArg === p.wallet.toLowerCase()) {
-      transferFromSelfAsFrom = true;
-    }
-  }
+  const transferFromSelfAsFrom =
+    data.toLowerCase().startsWith("0x23b872dd") &&
+    p.args.length >= 1 &&
+    String(p.args[0] ?? "").toLowerCase() === p.wallet.toLowerCase();
   const classifierVerdict = applyCustomCallClassifier(
     data,
     p.acknowledgeKnownExfilPattern,

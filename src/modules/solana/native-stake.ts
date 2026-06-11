@@ -181,9 +181,7 @@ function buildDraft(args: {
       from: args.walletStr,
       description: args.description,
       decoded: args.decoded,
-      ...(args.rentLamports !== undefined
-        ? { rentLamports: args.rentLamports }
-        : {}),
+      ...(args.rentLamports !== undefined && { rentLamports: args.rentLamports }),
       nonce: {
         account: args.noncePubkey.toBase58(),
         authority: args.fromPubkey.toBase58(),
@@ -312,7 +310,7 @@ export async function buildNativeStakeDeactivate(
         nonceAccount: ctx.noncePubkey.toBase58(),
       },
     },
-    actionIxs: [...deactivateTx.instructions],
+    actionIxs: deactivateTx.instructions,
   });
 
   const { handle } = issueSolanaDraftHandle(draft);
@@ -376,7 +374,7 @@ export async function buildNativeStakeWithdraw(
         nonceAccount: ctx.noncePubkey.toBase58(),
       },
     },
-    actionIxs: [...withdrawTx.instructions],
+    actionIxs: withdrawTx.instructions,
   });
 
   const { handle } = issueSolanaDraftHandle(draft);

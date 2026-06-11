@@ -192,11 +192,11 @@ export function findDemoContactByAddress(
   address: string,
 ): string | null {
   const target = chain === "evm" ? address.toLowerCase() : address;
-  for (const [label, entry] of store[chain].entries()) {
+  const hit = [...store[chain].entries()].find(([, entry]) => {
     const candidate = chain === "evm" ? entry.address.toLowerCase() : entry.address;
-    if (candidate === target) return label;
-  }
-  return null;
+    return candidate === target;
+  });
+  return hit ? hit[0] : null;
 }
 
 /** Test-only: reset the in-memory store. */

@@ -8,8 +8,7 @@ import {
   TRON_TOKENS,
   isTronAddress,
 } from "../../config/tron.js";
-import { resolveTronApiKey } from "../../config/user-config.js";
-import { readUserConfig } from "../../config/user-config.js";
+import { resolveTronApiKey, readUserConfig } from "../../config/user-config.js";
 import { formatUnits } from "../../data/format.js";
 import type { TronBalance, TronPortfolioSlice } from "../../types/index.js";
 

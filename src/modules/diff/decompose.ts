@@ -240,13 +240,11 @@ export async function buildChainSlice(args: {
   // current-balance-only per the index module's note).
   const priceRequests: PriceRequest[] = [];
   if (args.chain !== "bitcoin") {
-    const evmOrNonEvm = args.chain;
     for (const asset of universe.values()) {
-      const coinKey =
-        asset.token === NATIVE_TOKEN_KEY
-          ? nativeCoinKey(evmOrNonEvm)
-          : tokenCoinKey(evmOrNonEvm, asset.token);
-      priceRequests.push({ coinKey, timestamp: args.windowStartSec });
+      priceRequests.push({
+        coinKey: assetCoinKey(args.chain, asset.token),
+        timestamp: args.windowStartSec,
+      });
     }
   }
   const { prices, missed } = priceRequests.length
@@ -271,11 +269,11 @@ export async function buildChainSlice(args: {
     }
     let startingPriceUsd: number | undefined;
     if (args.chain !== "bitcoin") {
-      const coinKey =
-        asset.token === NATIVE_TOKEN_KEY
-          ? nativeCoinKey(args.chain)
-          : tokenCoinKey(args.chain, asset.token);
-      startingPriceUsd = getPrice(prices, coinKey, args.windowStartSec);
+      startingPriceUsd = getPrice(
+        prices,
+        assetCoinKey(args.chain, asset.token),
+        args.windowStartSec,
+      );
     }
     const endingPriceUsd = asset.endingPriceUsd;
 
@@ -377,6 +375,13 @@ export async function buildChainSlice(args: {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Return the DefiLlama coin key for an asset on a given (non-bitcoin) chain. */
+function assetCoinKey(chain: AnyChain, token: string): string {
+  return token === NATIVE_TOKEN_KEY
+    ? nativeCoinKey(chain)
+    : tokenCoinKey(chain, token);
 }
 
 /**

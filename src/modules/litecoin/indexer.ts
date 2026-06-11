@@ -256,10 +256,8 @@ export interface LitecoinBlockTip {
 function resolveIndexerUrl(): string {
   const fromEnv = process.env.LITECOIN_INDEXER_URL;
   if (fromEnv && fromEnv.trim().length > 0) return fromEnv.trim();
-  const cfg = readUserConfig();
-  if (cfg && cfg.litecoinIndexerUrl && cfg.litecoinIndexerUrl.trim().length > 0) {
-    return cfg.litecoinIndexerUrl.trim();
-  }
+  const fromCfg = readUserConfig()?.litecoinIndexerUrl?.trim();
+  if (fromCfg) return fromCfg;
   return LITECOIN_DEFAULT_INDEXER_URL;
 }
 
@@ -492,14 +490,6 @@ class EsploraIndexer implements LitecoinIndexer {
       block_hash?: string;
       block_time?: number;
     }
-    interface EsploraTip {
-      // mempool.space's `/blocks/tip/height` returns plain text
-      // numeric. Esplora-pure returns the same. We fetch via getJson
-      // since the Response.json() coerces a plain numeric body just
-      // fine; for resilience we handle string parsing too.
-      _height?: number;
-    }
-    void ({} as EsploraTip);
     let status: EsploraTxStatus;
     try {
       status = await this.getJson<EsploraTxStatus>(`/tx/${txid}/status`);

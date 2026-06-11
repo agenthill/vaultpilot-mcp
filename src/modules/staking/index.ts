@@ -42,21 +42,20 @@ export async function getStakingPositions(args: GetStakingPositionsArgs): Promis
 
   const positions: StakingPosition[] = [];
   const erroredSources: { source: "lido" | "eigenlayer"; error: string }[] = [];
+
+  function extractError(reason: unknown): string {
+    return reason instanceof Error ? reason.message : String(reason);
+  }
+
   if (lidoResult.status === "fulfilled") {
     positions.push(...lidoResult.value);
   } else {
-    erroredSources.push({
-      source: "lido",
-      error: lidoResult.reason instanceof Error ? lidoResult.reason.message : String(lidoResult.reason),
-    });
+    erroredSources.push({ source: "lido", error: extractError(lidoResult.reason) });
   }
   if (eigenResult.status === "fulfilled") {
     positions.push(...eigenResult.value);
   } else {
-    erroredSources.push({
-      source: "eigenlayer",
-      error: eigenResult.reason instanceof Error ? eigenResult.reason.message : String(eigenResult.reason),
-    });
+    erroredSources.push({ source: "eigenlayer", error: extractError(eigenResult.reason) });
   }
 
   return {

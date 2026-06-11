@@ -62,9 +62,7 @@ async function readMarketPosition(
     allowFailure: false,
   });
 
-  const supplyShares = (position as readonly [bigint, bigint, bigint])[0];
-  const borrowShares = (position as readonly [bigint, bigint, bigint])[1];
-  const collateralWei = (position as readonly [bigint, bigint, bigint])[2];
+  const [supplyShares, borrowShares, collateralWei] = position as readonly [bigint, bigint, bigint];
 
   if (supplyShares === 0n && borrowShares === 0n && collateralWei === 0n) {
     return null;

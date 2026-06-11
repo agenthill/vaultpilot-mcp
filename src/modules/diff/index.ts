@@ -101,7 +101,7 @@ async function snapshotTron(address: string): Promise<AssetSnapshot[]> {
   for (const b of [...slice.native, ...slice.trc20]) {
     if (b.amount === "0") continue;
     out.push({
-      token: b.token === "native" ? "native" : b.token,
+      token: b.token,
       symbol: b.symbol,
       decimals: b.decimals,
       endingQtyRaw: BigInt(b.amount),
@@ -119,7 +119,7 @@ async function snapshotSolana(address: string): Promise<AssetSnapshot[]> {
   for (const b of [...slice.native, ...slice.spl]) {
     if (b.amount === "0") continue;
     out.push({
-      token: b.token === "native" ? "native" : b.token,
+      token: b.token,
       symbol: b.symbol,
       decimals: b.decimals,
       endingQtyRaw: BigInt(b.amount),
@@ -350,10 +350,10 @@ export async function getPortfolioDiff(
   const windowEndIso = new Date(endSec * 1000).toISOString();
 
   const composed = await composePerChainDiff({
-    ...(args.wallet ? { wallet: args.wallet } : {}),
-    ...(args.tronAddress ? { tronAddress: args.tronAddress } : {}),
-    ...(args.solanaAddress ? { solanaAddress: args.solanaAddress } : {}),
-    ...(args.bitcoinAddress ? { bitcoinAddress: args.bitcoinAddress } : {}),
+    wallet: args.wallet,
+    tronAddress: args.tronAddress,
+    solanaAddress: args.solanaAddress,
+    bitcoinAddress: args.bitcoinAddress,
     startSec,
     endSec,
   });

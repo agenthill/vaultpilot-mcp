@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -123,8 +123,6 @@ function writeStore(store: Store): void {
   // poller writes; concurrent agents on the same machine WOULD race
   // here — accepted limitation, the worst case is lost samples not
   // a corrupt file).
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { renameSync } = require("node:fs") as typeof import("node:fs");
   renameSync(tmp, path);
 }
 

@@ -324,6 +324,12 @@ export async function getPortfolioSummary(
   };
 }
 
+/** Truncate an error message to at most 120 chars for note readability. */
+function truncateError(error: string): string {
+  const MAX_ERR = 120;
+  return error.length > MAX_ERR ? `${error.slice(0, MAX_ERR)}…` : error;
+}
+
 /**
  * Build the human-readable `coverage.compound.note` when one or more markets
  * failed to read. Includes per-chain + per-market + raw error message so the
@@ -344,12 +350,7 @@ export function formatCompoundErrorNote(
   const generic =
     "Compound V3 fetch failed on at least one market — some positions may be missing from totals.";
   if (!erroredMarkets || erroredMarkets.length === 0) return generic;
-  const MAX_ERR = 120;
-  const lines = erroredMarkets.map(({ chain, market, error }) => {
-    const trimmed =
-      error.length > MAX_ERR ? `${error.slice(0, MAX_ERR)}…` : error;
-    return `${chain}/${market}: ${trimmed}`;
-  });
+  const lines = erroredMarkets.map(({ chain, market, error }) => `${chain}/${market}: ${truncateError(error)}`);
   return `${generic} Failures: ${lines.join("; ")}. Call get_compound_positions for the full per-market read.`;
 }
 
@@ -368,12 +369,7 @@ export function formatMorphoErrorNote(
   const generic =
     "Morpho Blue event-log discovery failed on at least one chain — some positions may be missing from totals.";
   if (!erroredChains || erroredChains.length === 0) return generic;
-  const MAX_ERR = 120;
-  const lines = erroredChains.map(({ chain, error }) => {
-    const trimmed =
-      error.length > MAX_ERR ? `${error.slice(0, MAX_ERR)}…` : error;
-    return `${chain}: ${trimmed}`;
-  });
+  const lines = erroredChains.map(({ chain, error }) => `${chain}: ${truncateError(error)}`);
   return `${generic} Failures: ${lines.join("; ")}. Call get_morpho_positions with an explicit chain for a fast-path read.`;
 }
 
@@ -398,22 +394,18 @@ export function formatStakingErrorNote(
     // keeps callers that hit the empty-array branch honest about what broke.
     return "Staking (Lido/EigenLayer) fetch failed — positions not included.";
   }
-  const MAX_ERR = 120;
-  const lines = erroredSources.map(({ source, error }) => {
-    const trimmed =
-      error.length > MAX_ERR ? `${error.slice(0, MAX_ERR)}…` : error;
-    return `${source}: ${trimmed}`;
-  });
+  const lines = erroredSources.map(({ source, error }) => `${source}: ${truncateError(error)}`);
   return `${generic} Failures: ${lines.join("; ")}. The other staking source(s) still loaded where applicable.`;
 }
 
 function mergeCoverage(entries: { covered: boolean; errored?: boolean; note?: string }[]) {
   const anyErrored = entries.some((e) => e.errored);
   const allCovered = entries.every((e) => e.covered);
+  const noteEntry = entries.find((e) => e.note);
   return {
     covered: allCovered && !anyErrored,
     ...(anyErrored ? { errored: true } : {}),
-    ...(entries.find((e) => e.note)?.note ? { note: entries.find((e) => e.note)!.note } : {}),
+    ...(noteEntry?.note ? { note: noteEntry.note } : {}),
   };
 }
 

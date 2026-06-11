@@ -58,17 +58,15 @@ export async function explainTx(
 
   // Apply heuristics + add the v1 caveats.
   const heuristics = applyHeuristics(core);
-  const notes = [...core.notes];
-  notes.push(
+  const notes = [
+    ...core.notes,
     "v1 covers top-level execution only — internal calls / CPI / multi-hop " +
       "DeFi compositions show up only via their balance/approval effects, not " +
       "as separate steps. Full call-graph trace deferred.",
-  );
-  notes.push(
     "Pricing is current spot via DefiLlama, not historical at tx time. For " +
       "fresh txs the difference is sub-second; for older txs prices may have " +
       "drifted materially.",
-  );
+  ];
 
   const result: ExplainTxResult = {
     ...core,

@@ -92,9 +92,7 @@ export async function getCoinPriceTool(
   // XOR validation. Lives in the handler because the MCP SDK needs a
   // plain ZodObject for `.shape` extraction at registration time, so
   // we can't use `.refine()` on the schema.
-  const haveSymbol = !!args.symbol;
-  const haveId = !!args.coingeckoId;
-  if (haveSymbol === haveId) {
+  if (!!args.symbol === !!args.coingeckoId) {
     throw new Error(
       "Pass exactly one of `symbol` (allowlist lookup) or `coingeckoId` (escape hatch). Both or neither is invalid.",
     );

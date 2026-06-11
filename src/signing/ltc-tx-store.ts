@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { UnsignedLitecoinTx } from "../types/index.js";
 
 /**

@@ -395,7 +395,7 @@ export async function buildBitcoinNativeSend(
     outputs: [{ address: resolvedTo, value: Number(amountSats) }],
     feeRate,
     changeAddress: changeEntry.address,
-    ...(args.allowHighFee !== undefined ? { allowHighFee: args.allowHighFee } : {}),
+    allowHighFee: args.allowHighFee,
   });
 
   // Map selected inputs back to their source via (txid, vout) — that

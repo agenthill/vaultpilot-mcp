@@ -65,22 +65,19 @@ export async function simulatePinnedSolanaTx(
     commitment: "confirmed",
   });
   const logs = value.logs ?? undefined;
-  if (value.err === null) {
-    return {
-      ok: true,
-      ...(value.unitsConsumed !== undefined
-        ? { unitsConsumed: value.unitsConsumed }
-        : {}),
-      ...(logs ? { logs } : {}),
-    };
-  }
-  const anchorError = extractAnchorError(logs);
-  return {
-    ok: false,
+  const shared: Pick<SolanaSimulationResult, "unitsConsumed" | "logs"> = {
     ...(value.unitsConsumed !== undefined
       ? { unitsConsumed: value.unitsConsumed }
       : {}),
     ...(logs ? { logs } : {}),
+  };
+  if (value.err === null) {
+    return { ok: true, ...shared };
+  }
+  const anchorError = extractAnchorError(logs);
+  return {
+    ok: false,
+    ...shared,
     err: JSON.stringify(value.err),
     ...(anchorError ? { anchorError } : {}),
   };

@@ -55,7 +55,7 @@ export type RateLimitResult =
 export function checkAndRecord(hash: string, now: number = Date.now()): RateLimitResult {
   const events = readEvents();
 
-  const last = events.length > 0 ? events[events.length - 1] : undefined;
+  const last = events.at(-1);
   if (last && now - last.ts < MIN_INTERVAL_MS) {
     const retry = Math.ceil((MIN_INTERVAL_MS - (now - last.ts)) / 1000);
     return {
@@ -106,14 +106,11 @@ function readEvents(): FeedbackEvent[] {
     const raw = readFileSync(stateFile, "utf8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (e): e is FeedbackEvent =>
-        typeof e === "object" &&
-        e !== null &&
-        Number.isFinite((e as FeedbackEvent).ts) &&
-        typeof (e as FeedbackEvent).hash === "string" &&
-        (e as FeedbackEvent).hash.length > 0
-    );
+    return parsed.filter((e): e is FeedbackEvent => {
+      if (typeof e !== "object" || e === null) return false;
+      const ev = e as FeedbackEvent;
+      return Number.isFinite(ev.ts) && typeof ev.hash === "string" && ev.hash.length > 0;
+    });
   } catch {
     return [];
   }

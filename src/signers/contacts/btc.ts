@@ -53,6 +53,8 @@ export function pickBtcAnchor(): BtcAnchor | null {
       e.addressIndex === 0 &&
       e.addressType !== "taproot",
   );
+  const formatMap: Record<BtcAnchor["addressType"], BtcAnchor["addressFormat"]> =
+    { segwit: "bech32", "p2sh-segwit": "p2sh", legacy: "legacy" };
   // Preference: segwit > p2sh-segwit > legacy.
   const order = ["segwit", "p2sh-segwit", "legacy"] as const;
   for (const t of order) {
@@ -63,8 +65,7 @@ export function pickBtcAnchor(): BtcAnchor | null {
         path: hit.path,
         publicKey: hit.publicKey,
         addressType: t,
-        addressFormat:
-          t === "segwit" ? "bech32" : t === "p2sh-segwit" ? "p2sh" : "legacy",
+        addressFormat: formatMap[t],
       };
     }
   }

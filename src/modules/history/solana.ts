@@ -171,8 +171,9 @@ function classifyTransaction(
   // Single-native-program cases: System-only or SPL-Token-only.
   // These are the most common retail transactions and deserve their own
   // specific item type (not a generic program_interaction).
+  const programIdsArr = [...programIds];
   if (programIds.size === 1) {
-    const onlyProgram = [...programIds][0];
+    const onlyProgram = programIdsArr[0];
     if (onlyProgram === SYSTEM_PROGRAM) {
       const ext = tryExternalFromSystem(wallet, tx, blockTime, status);
       if (ext) return ext;
@@ -187,8 +188,8 @@ function classifyTransaction(
   // prominent non-native program for labeling. "Most prominent" = first
   // non-native top-level instruction. If all top-level instructions are
   // native (e.g. pure ATA creation), label with the first program.
-  const nonNativeTop = [...programIds].find((p) => !NATIVE_PROGRAMS.has(p));
-  const primaryProgramId = nonNativeTop ?? [...programIds][0] ?? SYSTEM_PROGRAM;
+  const nonNativeTop = programIdsArr.find((p) => !NATIVE_PROGRAMS.has(p));
+  const primaryProgramId = nonNativeTop ?? programIdsArr[0] ?? SYSTEM_PROGRAM;
   const known = lookupProgram(primaryProgramId);
   let programName = known?.name;
   let programKind = known?.kind;
