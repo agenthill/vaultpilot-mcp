@@ -10,6 +10,9 @@ import type {
 } from "../types/index.js";
 import { NATIVE_SYMBOL } from "../config/contracts.js";
 import { solanaLedgerMessageHash } from "./verification.js";
+import { getDefillamaCoinPrice } from "../data/prices.js";
+import { fetchBitcoinPrice } from "../modules/btc/price.js";
+import { fetchLitecoinPrice } from "../modules/litecoin/price.js";
 
 /**
  * Solana Explorer Inspector URL prefilled with the message bytes — same
@@ -137,6 +140,102 @@ export function renderCostPreviewBlock(
   }
   return `Estimated network fee: ≈ ${nativeFmt} ${symbol} (USD price unavailable)`;
 }
+
+/**
+ * Shared formatter for the non-EVM prepare-time fee preview. Mirrors
+ * `renderCostPreviewBlock`'s UX exactly so the fee-shock abort signal reads
+ * the same across every chain (issue #649): "Estimated network fee" headline,
+ * native amount always shown when present, USD half appended when the price
+ * lookup succeeded and dropped silently when it degraded.
+ *
+ * `usd` is the already-resolved USD-per-native price (or undefined when the
+ * fetch failed) — the caller does the network read so this stays a pure
+ * formatter. Returns the headline string; callers gate on a present fee field
+ * before calling (this never fabricates a number).
+ */
+function formatNonEvmCostPreview(
+  nativeFee: number,
+  symbol: string,
+  usdPerNative: number | undefined,
+): string {
+  const nativeFmt = formatNativeShort(String(nativeFee));
+  if (usdPerNative !== undefined) {
+    const usd = nativeFee * usdPerNative;
+    return `Estimated network fee: ~$${usd.toFixed(2)} (≈ ${nativeFmt} ${symbol})`;
+  }
+  return `Estimated network fee: ≈ ${nativeFmt} ${symbol} (USD price unavailable)`;
+}
+
+/**
+ * Prepare-time fee preview for Solana (issue #649). Reads the precomputed
+ * `estimatedFeeLamports` already on the unsigned-tx envelope (no new fee
+ * math) — base + priority fee in lamports — converts to SOL (1e9), and
+ * anchors it in USD via DefiLlama's `coingecko:solana` key (the same helper
+ * the Solana postmortem path uses).
+ *
+ * Returns `null` when the fee field is absent — silent over a fabricated
+ * number next to a real device prompt, matching the EVM block. The USD half
+ * is dropped (native-only) when the price lookup degrades; the render never
+ * throws and never blocks the preview.
+ *
+ * `priceFn` is injectable for deterministic tests; defaults to the real
+ * cached DefiLlama fetch.
+ */
+export async function renderSolanaCostPreviewBlock(
+  tx: Pick<UnsignedSolanaTx, "estimatedFeeLamports">,
+  priceFn: () => Promise<number | undefined> = async () =>
+    (await getDefillamaCoinPrice("solana").catch(() => undefined))?.price,
+): Promise<string | null> {
+  const lamports = tx.estimatedFeeLamports;
+  if (lamports === undefined) return null;
+  const sol = lamports / 1e9;
+  const usdPerSol = await priceFn();
+  return formatNonEvmCostPreview(sol, "SOL", usdPerSol);
+}
+
+/**
+ * Prepare-time fee preview for Bitcoin (issue #649). Reads the precomputed
+ * `decoded.feeBtc` decimal string already on the unsigned-tx envelope and
+ * anchors it in USD via `fetchBitcoinPrice` (DefiLlama `coingecko:bitcoin`).
+ * Same null-on-missing / native-only-on-degrade UX as the EVM block.
+ *
+ * `priceFn` is injectable for deterministic tests.
+ */
+export async function renderBitcoinCostPreviewBlock(
+  tx: { decoded: Pick<UnsignedBitcoinTx["decoded"], "feeBtc"> },
+  priceFn: () => Promise<number | undefined> = fetchBitcoinPrice,
+): Promise<string | null> {
+  const feeBtc = tx.decoded?.feeBtc;
+  if (feeBtc === undefined) return null;
+  const n = Number(feeBtc);
+  if (!Number.isFinite(n)) return null;
+  const usdPerBtc = await priceFn();
+  return formatNonEvmCostPreview(n, "BTC", usdPerBtc);
+}
+
+/**
+ * Prepare-time fee preview for Litecoin (issue #649). Reads the precomputed
+ * `decoded.feeLtc` decimal string already on the unsigned-tx envelope and
+ * anchors it in USD via `fetchLitecoinPrice` (DefiLlama `coingecko:litecoin`).
+ * Same null-on-missing / native-only-on-degrade UX as the EVM block.
+ *
+ * `priceFn` is injectable for deterministic tests.
+ */
+export async function renderLitecoinCostPreviewBlock(
+  tx: { decoded: Pick<UnsignedLitecoinTx["decoded"], "feeLtc"> },
+  priceFn: () => Promise<number | undefined> = fetchLitecoinPrice,
+): Promise<string | null> {
+  const feeLtc = tx.decoded?.feeLtc;
+  if (feeLtc === undefined) return null;
+  const n = Number(feeLtc);
+  if (!Number.isFinite(n)) return null;
+  const usdPerLtc = await priceFn();
+  return formatNonEvmCostPreview(n, "LTC", usdPerLtc);
+}
+
+// TRON prepare-time cost preview deferred to a follow-up issue: its fee model
+// (bandwidth/energy net of staked resources) needs a net-burn-after-stake math
+// layer, not just a render + USD anchor. Out of scope for #649.
 
 /**
  * Trim a wei-denominated fee to a short gwei string. Single source of
