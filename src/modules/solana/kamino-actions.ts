@@ -64,7 +64,7 @@ async function loadNonceContext(walletStr: string): Promise<NonceContext> {
   const noncePubkey = await deriveNonceAccountAddress(fromPubkey);
   const nonceState = await getNonceAccountValue(conn, noncePubkey);
   if (!nonceState) throwNonceRequired(walletStr);
-  return { fromPubkey, noncePubkey, nonceValue: nonceState!.nonce };
+  return { fromPubkey, noncePubkey, nonceValue: nonceState.nonce };
 }
 
 function tokenBaseUnits(amountDecimal: string, decimals: number): bigint {
@@ -368,8 +368,7 @@ export async function buildKaminoSupply(
 
   // KaminoAction.actionToIxs returns the flat ix list:
   // [computeBudget, setupIxs (ATA + refresh), lendingIx (deposit), cleanupIxs].
-  const { KaminoAction: KA } = await import("@kamino-finance/klend-sdk");
-  const kitIxs = KA.actionToIxs(action);
+  const kitIxs = KaminoAction.actionToIxs(action);
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
   const symbol = reserve.getTokenSymbol() ?? p.mint.slice(0, 6);
