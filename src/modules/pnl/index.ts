@@ -124,9 +124,9 @@ export async function getPnlSummary(
   const { startSec, endSec } = resolvePeriod(args.period);
 
   const composed = await composePerChainDiff({
-    ...(args.wallet ? { wallet: args.wallet } : {}),
-    ...(args.tronAddress ? { tronAddress: args.tronAddress } : {}),
-    ...(args.solanaAddress ? { solanaAddress: args.solanaAddress } : {}),
+    wallet: args.wallet,
+    tronAddress: args.tronAddress,
+    solanaAddress: args.solanaAddress,
     startSec,
     endSec,
   });
