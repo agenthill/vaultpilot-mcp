@@ -1,9 +1,6 @@
 import { cache } from "../cache.js";
 import { CACHE_TTL } from "../../config/cache.js";
-import {
-  etherscanV2Fetch,
-  EtherscanApiKeyMissingError,
-} from "./etherscan-v2.js";
+import { etherscanV2Fetch } from "./etherscan-v2.js";
 import type { SupportedChain } from "../../types/index.js";
 
 export interface ContractInfo {
@@ -69,20 +66,14 @@ export async function getContractInfo(
   const hit = cache.get<ContractInfo>(key);
   if (hit) return hit;
 
-  let rows: EtherscanSourceCodeItem[];
-  try {
-    rows = await etherscanV2Fetch<EtherscanSourceCodeItem>(chain, {
-      module: "contract",
-      action: "getsourcecode",
-      address,
-    });
-  } catch (e) {
-    // Surface the underlying error untouched — EtherscanApiKeyMissingError
-    // carries a helpful message, and transient errors (rate limit, etc.)
-    // should not pollute the 24h cache with a fake "not verified".
-    if (e instanceof EtherscanApiKeyMissingError) throw e;
-    throw e;
-  }
+  // Surface the underlying error untouched — EtherscanApiKeyMissingError
+  // carries a helpful message, and transient errors (rate limit, etc.)
+  // should not pollute the 24h cache with a fake "not verified".
+  const rows = await etherscanV2Fetch<EtherscanSourceCodeItem>(chain, {
+    module: "contract",
+    action: "getsourcecode",
+    address,
+  });
 
   if (!rows[0]) {
     // status:"1" with empty result — treat as unverified.
