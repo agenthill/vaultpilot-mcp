@@ -32,12 +32,16 @@
  * has a different convention (e.g. a stableswap pool where 0.1% would
  * be tighter than the deposit-rounding noise).
  */
-export function parseSlippageBps(args: {
+export function parseSlippageBps({
+  slippageBps,
+  acknowledgeHighSlippage,
+  defaultBps,
+}: {
   slippageBps: number | undefined;
   acknowledgeHighSlippage: boolean | undefined;
   defaultBps?: number;
 }): number {
-  const bps = args.slippageBps ?? args.defaultBps ?? 50;
+  const bps = slippageBps ?? defaultBps ?? 50;
   if (!Number.isInteger(bps) || bps < 0) {
     throw new Error(
       `slippageBps must be a non-negative integer (got ${bps}). ` +
@@ -50,7 +54,7 @@ export function parseSlippageBps(args: {
         `Higher slippage masks bad fills; refusing as a safety check.`,
     );
   }
-  if (bps > 100 && !args.acknowledgeHighSlippage) {
+  if (bps > 100 && !acknowledgeHighSlippage) {
     throw new Error(
       `Requested slippage is ${bps} bps (${(bps / 100).toFixed(2)}%). ` +
         `The default cap is 100 bps (1%) because higher values are almost ` +
