@@ -142,11 +142,12 @@ async function runInstall(target: SkillTarget): Promise<void> {
 export function getAutoInstallState(skillName: string): AutoInstallEntry {
   const existing = states.get(skillName);
   if (existing) return existing;
-  const target = getSkillTargets().find((t) => t.name === skillName);
+  const targets = getSkillTargets();
+  const target = targets.find((t) => t.name === skillName);
   if (!target) {
     throw new Error(
       `getAutoInstallState: unknown skill '${skillName}'. ` +
-        `Known: ${getSkillTargets().map((t) => t.name).join(", ")}.`,
+        `Known: ${targets.map((t) => t.name).join(", ")}.`,
     );
   }
   return { state: "not-attempted", target };

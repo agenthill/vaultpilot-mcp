@@ -159,12 +159,14 @@ export function installAllSkills(): SkillInstallResult[] {
 export function summarizeSkillInstalls(results: SkillInstallResult[]): string {
   const lines: string[] = [];
   for (const r of results) {
-    const tag =
-      r.status === "installed"
-        ? "✓ Installed"
-        : r.status === "already-present"
-          ? "✓ Already installed"
-          : "✗ Error";
+    let tag: string;
+    if (r.status === "installed") {
+      tag = "✓ Installed";
+    } else if (r.status === "already-present") {
+      tag = "✓ Already installed";
+    } else {
+      tag = "✗ Error";
+    }
     lines.push(`  ${tag}: ${r.name}`);
     lines.push(`      ${r.installPath}`);
     if (r.detail) lines.push(`      ${r.detail}`);
