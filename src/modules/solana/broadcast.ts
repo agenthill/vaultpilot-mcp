@@ -65,12 +65,10 @@ export async function broadcastSolanaTx(signedTxBytes: Buffer): Promise<string> 
     // Signal: "Rotating mega slot" in the logs. Without that line, treat
     // it as aged-out.
     const notEnoughSamples =
-      /custom program error: 0x178e/i.test(base) ||
-      /custom program error: 0x178e/i.test(logs) ||
+      /custom program error: 0x178e/i.test(base + logs) ||
       /NotEnoughSamples/.test(logs);
     if (notEnoughSamples) {
-      const rotating = /Rotating mega slot/i.test(logs);
-      if (rotating) {
+      if (/Rotating mega slot/i.test(logs)) {
         throw new Error(
           `Switchboard feed is ROTATING oracles ("Rotating mega slot" in the logs) ` +
             `— this is a transient ~60–120s state during which consensus cannot ` +

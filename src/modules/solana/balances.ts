@@ -229,7 +229,6 @@ export async function getSolanaTokenBalance(
     conn.getTokenAccountsByOwner(pubkey, { programId: TOKEN_2022_PROGRAM_ID }),
   ]);
   let raw = 0n;
-  let decimals: number | undefined;
   for (const entry of [...spl.value, ...spl2022.value]) {
     const data = entry.account.data;
     if (!(data instanceof Buffer) || data.length < 72) continue;
@@ -238,22 +237,21 @@ export async function getSolanaTokenBalance(
     raw += data.readBigUInt64LE(64);
   }
   // Without a canonical decimals entry, fetch via getTokenSupply.
-  if (raw > 0n || decimals === undefined) {
-    try {
-      const supply = await conn.getTokenSupply(mintPubkey);
-      decimals = supply.value.decimals;
-    } catch {
-      decimals = 0;
-    }
+  let decimals = 0;
+  try {
+    const supply = await conn.getTokenSupply(mintPubkey);
+    decimals = supply.value.decimals;
+  } catch {
+    decimals = 0;
   }
   const symbol = token === WSOL_MINT ? "WSOL" : "UNKNOWN";
   return {
     chain: "solana",
     token,
     symbol,
-    decimals: decimals ?? 0,
+    decimals,
     amount: raw.toString(),
-    formatted: formatUnits(raw, decimals ?? 0),
+    formatted: formatUnits(raw, decimals),
     priceMissing: true,
   };
 }
