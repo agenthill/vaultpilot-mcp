@@ -148,13 +148,11 @@ export async function shareStrategy(
   // adds a "whose strategy is this?" attribution question that's a
   // separate plan).
   const summary = (await getPortfolioSummary({
-    ...(args.wallet ? { wallet: args.wallet } : {}),
-    ...(args.tronAddress ? { tronAddress: args.tronAddress } : {}),
-    ...(args.solanaAddress ? { solanaAddress: args.solanaAddress } : {}),
-    ...(args.bitcoinAddress ? { bitcoinAddress: args.bitcoinAddress } : {}),
-    ...(args.litecoinAddress
-      ? { litecoinAddress: args.litecoinAddress }
-      : {}),
+    wallet: args.wallet,
+    tronAddress: args.tronAddress,
+    solanaAddress: args.solanaAddress,
+    bitcoinAddress: args.bitcoinAddress,
+    litecoinAddress: args.litecoinAddress,
   })) as PortfolioSummary;
 
   const positions = sortPositions(serializePortfolioToPositions(summary));
@@ -185,9 +183,9 @@ export async function shareStrategy(
     version: SHARED_STRATEGY_VERSION,
     meta: {
       name: args.name,
-      ...(args.description ? { description: args.description } : {}),
-      ...(args.authorLabel ? { authorLabel: args.authorLabel } : {}),
-      ...(args.riskProfile ? { riskProfile: args.riskProfile as NonNullable<SharedStrategy["meta"]["riskProfile"]> } : {}),
+      ...(args.description !== undefined ? { description: args.description } : {}),
+      ...(args.authorLabel !== undefined ? { authorLabel: args.authorLabel } : {}),
+      ...(args.riskProfile !== undefined ? { riskProfile: args.riskProfile as NonNullable<SharedStrategy["meta"]["riskProfile"]> } : {}),
       createdIso: new Date().toISOString(),
       chains: chainsFromPositions(positions),
     },

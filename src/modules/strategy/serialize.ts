@@ -52,30 +52,9 @@ function emitEvmBalances(
   natives: TokenAmount[],
   erc20: TokenAmount[],
   totalUsd: number,
-  chainOf: (token: TokenAmount) => string,
+  chain: string,
 ): SharedStrategyPosition[] {
-  const out: SharedStrategyPosition[] = [];
-  for (const n of natives) {
-    if (!n.valueUsd || n.amount === "0") continue;
-    out.push({
-      protocol: "wallet",
-      chain: chainOf(n),
-      kind: "balance",
-      asset: n.symbol,
-      pctOfTotal: pct(n.valueUsd, totalUsd),
-    });
-  }
-  for (const t of erc20) {
-    if (!t.valueUsd || t.amount === "0") continue;
-    out.push({
-      protocol: "wallet",
-      chain: chainOf(t),
-      kind: "balance",
-      asset: t.symbol,
-      pctOfTotal: pct(t.valueUsd, totalUsd),
-    });
-  }
-  return out;
+  return emitWalletBalances([...natives, ...erc20], chain, totalUsd);
 }
 
 function emitLending(
@@ -210,33 +189,31 @@ function emitStaking(
   return out;
 }
 
-function emitTronBalances(
-  natives: TronBalance[],
-  trc20: TronBalance[],
+function emitWalletBalances(
+  tokens: Array<{ valueUsd?: number; amount: string; symbol: string }>,
+  chain: string,
   totalUsd: number,
 ): SharedStrategyPosition[] {
   const out: SharedStrategyPosition[] = [];
-  for (const n of natives) {
-    if (!n.valueUsd || n.amount === "0") continue;
-    out.push({
-      protocol: "wallet",
-      chain: "tron",
-      kind: "balance",
-      asset: n.symbol,
-      pctOfTotal: pct(n.valueUsd, totalUsd),
-    });
-  }
-  for (const t of trc20) {
+  for (const t of tokens) {
     if (!t.valueUsd || t.amount === "0") continue;
     out.push({
       protocol: "wallet",
-      chain: "tron",
+      chain,
       kind: "balance",
       asset: t.symbol,
       pctOfTotal: pct(t.valueUsd, totalUsd),
     });
   }
   return out;
+}
+
+function emitTronBalances(
+  natives: TronBalance[],
+  trc20: TronBalance[],
+  totalUsd: number,
+): SharedStrategyPosition[] {
+  return emitWalletBalances([...natives, ...trc20], "tron", totalUsd);
 }
 
 function emitTronStaking(
@@ -260,28 +237,7 @@ function emitSolanaBalances(
   spl: SolanaBalance[],
   totalUsd: number,
 ): SharedStrategyPosition[] {
-  const out: SharedStrategyPosition[] = [];
-  for (const n of natives) {
-    if (!n.valueUsd || n.amount === "0") continue;
-    out.push({
-      protocol: "wallet",
-      chain: "solana",
-      kind: "balance",
-      asset: n.symbol,
-      pctOfTotal: pct(n.valueUsd, totalUsd),
-    });
-  }
-  for (const s of spl) {
-    if (!s.valueUsd || s.amount === "0") continue;
-    out.push({
-      protocol: "wallet",
-      chain: "solana",
-      kind: "balance",
-      asset: s.symbol,
-      pctOfTotal: pct(s.valueUsd, totalUsd),
-    });
-  }
-  return out;
+  return emitWalletBalances([...natives, ...spl], "solana", totalUsd);
 }
 
 function emitSolanaLending(
@@ -443,7 +399,7 @@ export function serializePortfolioToPositions(
       summary.breakdown.native,
       summary.breakdown.erc20,
       total,
-      () => primaryChain,
+      primaryChain,
     ),
   );
   positions.push(...emitLending(summary.breakdown.lending, total));

@@ -88,7 +88,7 @@ export class RedactionError extends Error {
  */
 export function assertNoAddressLeak(value: unknown): void {
   const serialized = JSON.stringify(value);
-  if (typeof serialized !== "string" || serialized.length === 0) {
+  if (!serialized) {
     return;
   }
   for (const rule of SCAN_RULES) {
