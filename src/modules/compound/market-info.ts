@@ -139,9 +139,7 @@ export async function getCompoundMarketInfo(
 
   const baseDecimals = Number(baseMeta[0]);
   const baseSymbol = baseMeta[1] as string;
-  const assetInfos: RawAssetInfo[] = (assetInfoResults as unknown[]).map(
-    (r) => r as RawAssetInfo
-  );
+  const assetInfos = assetInfoResults as unknown as RawAssetInfo[];
 
   // Per-collateral enrichment: totalsCollateral(address), ERC-20 decimals,
   // ERC-20 symbol. Batch all of them into one multicall.
