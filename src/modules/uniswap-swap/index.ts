@@ -317,6 +317,15 @@ export async function prepareUniswapSwap(
   }
   const mevNote = mevExposureNote(chain, slippageBps, fromAmountUsd);
 
+  let decodedFunctionName: string;
+  if (wantsNativeOut || (hasNativeIn && isExactOut)) {
+    decodedFunctionName = "multicall";
+  } else if (isExactOut) {
+    decodedFunctionName = "exactOutputSingle";
+  } else {
+    decodedFunctionName = "exactInputSingle";
+  }
+
   const swapTx: UnsignedTx = {
     chain,
     to: swapRouter02,
@@ -325,7 +334,7 @@ export async function prepareUniswapSwap(
     from: wallet,
     description,
     decoded: {
-      functionName: wantsNativeOut || (hasNativeIn && isExactOut) ? "multicall" : isExactOut ? "exactOutputSingle" : "exactInputSingle",
+      functionName: decodedFunctionName,
       args: {
         venue: "Uniswap V3",
         pool: `${fromSym}/${toSym} @ ${feeLabel}`,
@@ -411,12 +420,11 @@ async function readSymbol(
   token: `0x${string}`
 ): Promise<string> {
   const client = getClient(chain);
-  const sym = (await client.readContract({
+  return (await client.readContract({
     address: token,
     abi: erc20Abi,
     functionName: "symbol",
   })) as string;
-  return sym;
 }
 
 function nativeSymbol(chain: SupportedChain): string {
