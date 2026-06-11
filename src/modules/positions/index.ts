@@ -64,6 +64,11 @@ function marginPct(hf: number): number {
   return Math.max(0, Math.round(((hf - 1) / hf) * 10000) / 100);
 }
 
+/** Cap Infinity at the sentinel 1e18 and round to 4 decimal places. */
+function normalizeHF(hf: number): number {
+  return hf === Number.POSITIVE_INFINITY ? 1e18 : Math.round(hf * 10000) / 10000;
+}
+
 /**
  * Across-protocol liquidation-risk reader. Issue #427: until this rewrite
  * the function only scanned Aave V3 reserves — a user with no Aave borrows
@@ -398,12 +403,12 @@ export async function simulatePositionChange(args: SimulatePositionChangeArgs): 
       protocol,
       action: args.action,
       before: {
-        healthFactor: beforeHF === Number.POSITIVE_INFINITY ? 1e18 : Math.round(beforeHF * 10000) / 10000,
+        healthFactor: normalizeHF(beforeHF),
         collateralUsd: pos.totalCollateralUsd,
         debtUsd: beforeDebt,
       },
       after: {
-        healthFactor: afterHF === Number.POSITIVE_INFINITY ? 1e18 : Math.round(afterHF * 10000) / 10000,
+        healthFactor: normalizeHF(afterHF),
         collateralUsd: Math.round(newCollateralUsd * 100) / 100,
         debtUsd: Math.round(newDebt * 100) / 100,
         safe: afterHF > 1.0,
@@ -464,12 +469,12 @@ export async function simulatePositionChange(args: SimulatePositionChangeArgs): 
     protocol,
     action: args.action,
     before: {
-      healthFactor: beforeHF === Number.POSITIVE_INFINITY ? 1e18 : Math.round(beforeHF * 10000) / 10000,
+      healthFactor: normalizeHF(beforeHF),
       collateralUsd: pos.totalCollateralUsd,
       debtUsd: pos.totalDebtUsd,
     },
     after: {
-      healthFactor: afterHF === Number.POSITIVE_INFINITY ? 1e18 : Math.round(afterHF * 10000) / 10000,
+      healthFactor: normalizeHF(afterHF),
       collateralUsd: Math.round(newCollateralUsd * 100) / 100,
       debtUsd: Math.round(newDebt * 100) / 100,
       safe: afterHF > 1.0,

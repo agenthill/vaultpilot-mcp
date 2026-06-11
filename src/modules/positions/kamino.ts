@@ -123,21 +123,19 @@ export async function getKaminoPositions(
     return [];
   }
 
-  const supplied: KaminoBalanceEntry[] = [];
-  for (const [reserveAddr, pos] of obligationState.deposits.entries()) {
-    void reserveAddr;
-    const reserve = market.getReserveByAddress(pos.reserveAddress);
-    if (!reserve) continue; // shouldn't happen on a healthy market
-    supplied.push(projectPosition(pos, reserve));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function collectBalances(entries: Map<any, any>): KaminoBalanceEntry[] {
+    const out: KaminoBalanceEntry[] = [];
+    for (const [, pos] of entries) {
+      const reserve = market!.getReserveByAddress(pos.reserveAddress);
+      if (!reserve) continue;
+      out.push(projectPosition(pos, reserve));
+    }
+    return out;
   }
 
-  const borrowed: KaminoBalanceEntry[] = [];
-  for (const [reserveAddr, pos] of obligationState.borrows.entries()) {
-    void reserveAddr;
-    const reserve = market.getReserveByAddress(pos.reserveAddress);
-    if (!reserve) continue;
-    borrowed.push(projectPosition(pos, reserve));
-  }
+  const supplied = collectBalances(obligationState.deposits);
+  const borrowed = collectBalances(obligationState.borrows);
 
   const totalSuppliedUsd = supplied.reduce((s, b) => s + b.valueUsd, 0);
   const totalBorrowedUsd = borrowed.reduce((s, b) => s + b.valueUsd, 0);
