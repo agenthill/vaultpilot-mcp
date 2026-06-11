@@ -157,10 +157,6 @@ function findRegistryKey(
   return null;
 }
 
-function knownEvmSymbols(chain: SupportedChain): string[] {
-  return Object.keys(CONTRACTS[chain].tokens as Record<string, string>);
-}
-
 export async function resolveToken(
   args: ResolveTokenArgs,
 ): Promise<ResolveTokenResult> {
@@ -222,7 +218,7 @@ export async function resolveToken(
   const tokens = CONTRACTS[evmChain].tokens as Record<string, string>;
   const key = findRegistryKey(tokens, symbol);
   if (!key) {
-    throw new Error(unknownSymbolError(symbol, evmChain, knownEvmSymbols(evmChain)));
+    throw new Error(unknownSymbolError(symbol, evmChain, Object.keys(tokens)));
   }
   const contract = tokens[key];
   const decimals = EVM_DECIMALS[key];
