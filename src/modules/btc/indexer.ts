@@ -270,12 +270,11 @@ export interface BitcoinBlockTip {
  * Resolve the indexer base URL via env > config > default.
  */
 function resolveIndexerUrl(): string {
-  const fromEnv = process.env.BITCOIN_INDEXER_URL;
-  if (fromEnv && fromEnv.trim().length > 0) return fromEnv.trim();
+  const fromEnv = process.env.BITCOIN_INDEXER_URL?.trim();
+  if (fromEnv) return fromEnv;
   const cfg = readUserConfig();
-  if (cfg && cfg.bitcoinIndexerUrl && cfg.bitcoinIndexerUrl.trim().length > 0) {
-    return cfg.bitcoinIndexerUrl.trim();
-  }
+  const fromCfg = cfg?.bitcoinIndexerUrl?.trim();
+  if (fromCfg) return fromCfg;
   return BITCOIN_DEFAULT_INDEXER_URL;
 }
 
@@ -508,14 +507,6 @@ class EsploraIndexer implements BitcoinIndexer {
       block_hash?: string;
       block_time?: number;
     }
-    interface EsploraTip {
-      // mempool.space's `/blocks/tip/height` returns plain text
-      // numeric. Esplora-pure returns the same. We fetch via getJson
-      // since the Response.json() coerces a plain numeric body just
-      // fine; for resilience we handle string parsing too.
-      _height?: number;
-    }
-    void ({} as EsploraTip);
     let status: EsploraTxStatus;
     try {
       status = await this.getJson<EsploraTxStatus>(`/tx/${txid}/status`);
