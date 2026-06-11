@@ -176,6 +176,7 @@ export async function getMultisigBalance(
   let confirmedSats = 0n;
   let mempoolSats = 0n;
   let txCount = 0;
+  const walked = { receive: 0, change: 0 };
 
   for (const chain of [0, 1] as const) {
     let consecutiveEmpty = 0;
@@ -206,6 +207,8 @@ export async function getMultisigBalance(
       }
       i += 1;
     }
+    if (chain === 0) walked.receive = i;
+    else walked.change = i;
   }
 
   return {
@@ -218,18 +221,7 @@ export async function getMultisigBalance(
     totalSats: confirmedSats + mempoolSats,
     txCount,
     addresses,
-    walked: {
-      receive:
-        addresses.filter((a) => a.chain === 0).reduce(
-          (max, a) => Math.max(max, a.addressIndex + 1),
-          0,
-        ) + gapLimit,
-      change:
-        addresses.filter((a) => a.chain === 1).reduce(
-          (max, a) => Math.max(max, a.addressIndex + 1),
-          0,
-        ) + gapLimit,
-    },
+    walked,
   };
 }
 
@@ -249,12 +241,12 @@ export async function getMultisigUtxos(
     );
   }
   const gapLimit = clampGapLimit(args.gapLimit);
+  const indexer = getBitcoinIndexer();
   const utxos: MultisigUtxo[] = [];
   let totalSats = 0n;
   const walked = { receive: 0, change: 0 };
   for (const chain of [0, 1] as const) {
     const result = await walkChain(wallet, chain, gapLimit, async (info) => {
-      const indexer = getBitcoinIndexer();
       const addrUtxos = await indexer.getUtxos(info.address);
       return addrUtxos.map<MultisigUtxo>((u) => ({
         ...u,

@@ -529,12 +529,13 @@ function applyPartialSignatures(
 function minSignatureCount(
   psbt: ReturnType<typeof bitcoinjs.Psbt.fromBase64>,
 ): number {
-  let min = Number.POSITIVE_INFINITY;
+  if (psbt.data.inputs.length === 0) return 0;
+  let min = Infinity;
   for (const input of psbt.data.inputs) {
     const count = input.partialSig?.length ?? 0;
     if (count < min) min = count;
   }
-  return Number.isFinite(min) ? min : 0;
+  return min;
 }
 
 export async function signBitcoinMultisigPsbt(
