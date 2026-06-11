@@ -397,14 +397,24 @@ function signatureOf(item: AbiFunction): string {
  * destination trust is NOT — the partial source label IS the warning.
  *
  * Each entry's `abi` is a single-function ABI tuple ready for
- * `decodeFunctionData`. We assert the selector matches at module load
- * (see `assertSelectorMatches` below) so a mistyped selector or signature
- * fails fast at server startup instead of silently mis-decoding.
+ * `decodeFunctionData`. The `selector` and `signature` are kept in sync by
+ * hand; the per-entry decode tests pin each selector against its calldata
+ * (`expect(data.slice(0, 10)).toBe(selector)`), so a mistyped selector or
+ * signature fails in CI rather than silently mis-decoding.
  */
 interface HighRiskSelector {
   selector: `0x${string}`;
   signature: string;
   abi: AbiFunction;
+  /**
+   * Set when the ABI has a dynamic tail (e.g. a trailing `bytes` arg) so the
+   * encoded calldata length is variable. For these entries the strict
+   * fixed-length guard is replaced by a minimum-length check (the static head
+   * must fit); viem's `decodeFunctionData` then validates the dynamic
+   * encoding and throws on a malformed payload. Static-only entries omit this
+   * and keep the exact-length guard.
+   */
+  dynamicTail?: true;
 }
 
 const HIGH_RISK_STANDARD_SELECTORS: readonly HighRiskSelector[] = [
@@ -425,6 +435,49 @@ const HIGH_RISK_STANDARD_SELECTORS: readonly HighRiskSelector[] = [
       outputs: [],
     },
   },
+  {
+    // ERC-721 safeTransferFrom(address from, address to, uint256 tokenId).
+    // A rogue MCP can route an NFT transfer to an attacker-controlled `to`
+    // on an uncurated collection while narrating a benign recipient.
+    // Surfacing `to` + `tokenId` lets Inv #1 flag the label/calldata
+    // mismatch. (Issue #670, rogue-MCP-only / cooperating-agent slice.)
+    selector: "0x42842e0e",
+    signature: "safeTransferFrom(address,address,uint256)",
+    abi: {
+      type: "function",
+      name: "safeTransferFrom",
+      stateMutability: "nonpayable",
+      inputs: [
+        { name: "from", type: "address" },
+        { name: "to", type: "address" },
+        { name: "tokenId", type: "uint256" },
+      ],
+      outputs: [],
+    },
+  },
+  {
+    // ERC-721 safeTransferFrom(address from, address to, uint256 tokenId,
+    // bytes data) — the overload that carries an arbitrary `data` payload to
+    // the receiver's onERC721Received hook. Same recipient-spoofing threat
+    // as the 3-arg form; the trailing `bytes` makes the calldata length
+    // variable, so this entry is flagged `dynamicTail` to swap the
+    // exact-length guard for a minimum-length head check.
+    selector: "0xb88d4fde",
+    signature: "safeTransferFrom(address,address,uint256,bytes)",
+    abi: {
+      type: "function",
+      name: "safeTransferFrom",
+      stateMutability: "nonpayable",
+      inputs: [
+        { name: "from", type: "address" },
+        { name: "to", type: "address" },
+        { name: "tokenId", type: "uint256" },
+        { name: "data", type: "bytes" },
+      ],
+      outputs: [],
+    },
+    dynamicTail: true,
+  },
 ];
 
 function decodeHighRiskStandardSelector(
@@ -435,14 +488,21 @@ function decodeHighRiskStandardSelector(
   const entry = HIGH_RISK_STANDARD_SELECTORS.find((e) => e.selector === selector);
   if (!entry) return null;
 
-  // ABI sanity: every standard selector listed here takes a fixed-size
-  // head with no dynamic tails (address + bool packs to exactly 64 bytes
-  // = 128 hex chars after the 4-byte selector). Reject calldata of the
-  // wrong length to avoid surfacing a spuriously-decoded args list when
-  // a different function with a coincidentally-matching selector prefix
-  // was intended.
-  const expectedHexLen = 10 + entry.abi.inputs.length * 64;
-  if (data.length !== expectedHexLen) return null;
+  // ABI sanity. For static-only entries (e.g. setApprovalForAll(address,bool)
+  // or safeTransferFrom(address,address,uint256)) the head packs to exactly
+  // `inputs.length * 64` hex chars after the 4-byte selector — reject any
+  // other length to avoid surfacing a spuriously-decoded args list when a
+  // different function with a coincidentally-matching selector prefix was
+  // intended. For `dynamicTail` entries (a trailing `bytes` arg makes the
+  // length variable) the head is still fixed, so require AT LEAST that many
+  // hex chars; viem's `decodeFunctionData` then validates the dynamic tail
+  // and throws on a malformed payload, falling through to source:'none'.
+  const headHexLen = 10 + entry.abi.inputs.length * 64;
+  if (entry.dynamicTail) {
+    if (data.length < headHexLen) return null;
+  } else if (data.length !== headHexLen) {
+    return null;
+  }
 
   let decoded: { functionName: string; args?: readonly unknown[] };
   try {
