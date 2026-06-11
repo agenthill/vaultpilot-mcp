@@ -93,8 +93,7 @@ export function redactEnvelope<T>(envelope: T, mode: RedactionMode): T {
 function walk(value: unknown, mode: RedactionMode): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return redactAddress(value, mode);
-  if (typeof value === "number") return value;
-  if (typeof value === "boolean") return value;
+  if (typeof value === "number" || typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.map((v) => walk(v, mode));
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
