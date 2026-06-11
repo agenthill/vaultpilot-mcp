@@ -340,6 +340,13 @@ async function chunkedGetAccountInfosWithNulls(
  * silently drops ~7 mainnet banks (USDC/USDT/SOL/USDS/JupSOL) at
  * step=decode (issue #156).
  *
+ * Scope note: 0.1.8 fixes only the **decode** step — these banks now hydrate
+ * and are suppliable (no longer reported as de-listed). The bundled SDK 6.4.2
+ * runtime still cannot PARSE Juplend oracle setups (`parseOracleSetup` → "None"
+ * → `parsePriceInfo` throws), so a genuinely Juplend-priced bank surfaces with
+ * no price and is skipped at step=priceInfo; borrow/withdraw health and position
+ * pricing for it stay impaired until the SDK adds Juplend oracle support upstream.
+ *
  * Layout-safety: the `Bank` account is 1856 bytes in BOTH 0.1.7 and 0.1.8,
  * and `BankConfig` (which carries `oracleSetup`) is byte-identical between
  * them. 0.1.8 only re-interprets 0.1.7's trailing reserved `_padding_1`
@@ -1106,7 +1113,7 @@ async function resolveActionContext(
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
     throw new Error(
-      `MarginfiClient load failed for wallet ${p.wallet} — the bundled SDK (v6.4.1) ` +
+      `MarginfiClient load failed for wallet ${p.wallet} — the bundled SDK (v6.4.2) ` +
         `couldn't decode one of the production group's banks or oracle prices. ` +
         `Raw error: ${raw}. Retry in a minute; if it persists, MarginFi may have ` +
         `shipped an on-chain upgrade the SDK version doesn't support yet.`,
@@ -1133,7 +1140,7 @@ async function resolveActionContext(
     throw new Error(
       `MarginfiAccount at ${marginfiAccount.toBase58()} exists on chain but the SDK could ` +
         `not hydrate it as a MarginfiAccountWrapper — this is unexpected. Retry; if it ` +
-        `persists, the account data may be in a new schema this SDK version (v6.4.1) ` +
+        `persists, the account data may be in a new schema this SDK version (v6.4.2) ` +
         `doesn't understand.`,
     );
   }
