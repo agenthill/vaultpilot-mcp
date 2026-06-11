@@ -245,6 +245,9 @@ beforeEach(async () => {
 
   const mfn = await import("../src/modules/solana/marginfi.js");
   mfn.__clearMarginfiClientCache();
+  // Drop any injected/real 0.1.8 decode coder so a per-test injection
+  // (issue-#107 decode-skip test) can't leak into other tests.
+  mfn.__clearBank018DecodeProgram();
 
   const { getNonceAccountValue } = await import(
     "../src/modules/solana/nonce.js"
@@ -823,9 +826,19 @@ describe("hardenedFetchGroupData diagnostic recording (issue #107)", () => {
       ]);
 
     const conn = { getMultipleAccountsInfo };
+    // Since the issue-#156 retarget, the decode runs through the dedicated
+    // 0.1.8 coder (getBank018DecodeProgram), NOT `program.coder`. This file
+    // mocks `@coral-xyz/anchor` wholesale, so we inject a throwing decode
+    // coder via the test hook to force the skip path.
     const program = {
       provider: { connection: conn },
-      // Force a decode failure to exercise the skip path.
+      programId: new PublicKey(SYSTEM_PROGRAM),
+      idl: {},
+    };
+
+    const marginfi = await import("../src/modules/solana/marginfi.js");
+    marginfi.__clearMarginfiGroupDiagnostics();
+    marginfi.__setBank018DecodeProgramForTest({
       coder: {
         accounts: {
           decode: () => {
@@ -833,12 +846,7 @@ describe("hardenedFetchGroupData diagnostic recording (issue #107)", () => {
           },
         },
       },
-      programId: new PublicKey(SYSTEM_PROGRAM),
-      idl: {},
-    };
-
-    const marginfi = await import("../src/modules/solana/marginfi.js");
-    marginfi.__clearMarginfiGroupDiagnostics();
+    });
 
     // MarginfiGroup.fromBuffer gets called; return anything — we don't
     // assert on the return value, only on the diagnostic side-effect.
@@ -869,6 +877,207 @@ describe("hardenedFetchGroupData diagnostic recording (issue #107)", () => {
     expect(rec.mint).toBe(USDC_MINT);
     expect(rec.step).toBe("decode");
     expect(rec.reason).toMatch(/probe-induced decode failure/);
+  });
+});
+
+/**
+ * Issue #156 — banks whose `OracleSetup` is JuplendPythPull (15) or
+ * JuplendSwitchboardPull (16) cannot be decoded by IDL 0.1.7 (13 variants):
+ * `coder.accounts.decode("bank", …)` throws the opaque
+ * `Cannot read properties of null (reading 'property')`, so the hardened
+ * fetch records a step=decode skip and ~7 mainnet banks (USDC/USDT/SOL/
+ * USDS/JupSOL) silently vanish. marginfi-client-v2 6.4.2 ships IDL 0.1.8
+ * (18 variants) but STILL exports `MARGINFI_IDL` = 0.1.7, so the decode
+ * path has to load 0.1.8 explicitly (`getBank018DecodeProgram`).
+ *
+ * These tests build the 0.1.7 and 0.1.8 account coders the SAME way the
+ * production helper does — a real Anchor `Program` from the bundled IDL
+ * JSON (via `vi.importActual`, since this file otherwise mocks
+ * `@coral-xyz/anchor` + the SDK module) — and decode a real on-chain-shaped
+ * Bank buffer whose `oracleSetup` byte is 16. The falsifier is genuine:
+ * the 0.1.8 coder decodes it to `juplendSwitchboardPull`; the 0.1.7 coder
+ * throws the exact issue-#156 error. A revert of the decode-IDL retarget
+ * (back to 0.1.7) flips the pass-after assertion to the fail-before throw.
+ */
+describe("Bank decode for OracleSetup variants 15/16 (issue #156)", () => {
+  // The `Bank` account is 1856 bytes in both 0.1.7 and 0.1.8; `oracleSetup`
+  // (a single enum-discriminant byte inside the byte-identical `BankConfig`)
+  // sits at offset 609 from the account-data start (8-byte Anchor
+  // discriminator + leading Bank fields). Live-located against
+  // @coral-xyz/anchor@0.30.1 by sweeping each byte until the decoded
+  // `config.oracleSetup` flipped to the variant under test.
+  const ORACLE_SETUP_OFFSET = 609;
+  const PROGRAM_ID = "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA";
+
+  /** Build a real Bank account buffer (8-byte disc + 1856-byte zeroed Bank)
+   *  with `oracleSetup` set to `variant`. Discriminator pulled from the IDL
+   *  so the Anchor coder recognizes the account. */
+  function bankBufferWithOracleSetup(
+    idl: { accounts: Array<{ name: string; discriminator: number[] }> },
+    variant: number,
+  ): Buffer {
+    const disc = idl.accounts.find((a) => a.name === "Bank")!.discriminator;
+    const buf = Buffer.alloc(8 + 1856, 0);
+    Buffer.from(disc).copy(buf, 0);
+    buf[ORACLE_SETUP_OFFSET] = variant;
+    return buf;
+  }
+
+  async function makeAccountsCoder(
+    idl: object,
+  ): Promise<{ decode(name: string, data: Buffer): { config: { oracleSetup: Record<string, unknown> } } }> {
+    const { Program } = await vi.importActual<typeof import("@coral-xyz/anchor")>(
+      "@coral-xyz/anchor",
+    );
+    // A full Program (not a free-standing BorshAccountsCoder) camelCases
+    // account-layout keys, so the decode key is the lowercase "bank" the
+    // production path uses — identical construction to
+    // getBank018DecodeProgram.
+    const program = new Program(
+      { ...idl, address: PROGRAM_ID } as never,
+      { connection: {}, publicKey: undefined } as never,
+    );
+    return program.coder.accounts as never;
+  }
+
+  it("0.1.8 IDL's OracleSetup enum carries 18 variants including indices 15/16", async () => {
+    const idl018 = (
+      await vi.importActual<{ default: { types: Array<{ name: string; type: { variants?: Array<{ name: string }> } }> } }>(
+        "@mrgnlabs/marginfi-client-v2/dist/idl/marginfi_0.1.8.json",
+      )
+    ).default;
+    const oracleSetup = idl018.types.find((t) => t.name === "OracleSetup");
+    expect(oracleSetup).toBeDefined();
+    const variants = oracleSetup!.type.variants!.map((v) => v.name);
+    expect(variants).toHaveLength(18);
+    expect(variants[15]).toBe("JuplendPythPull");
+    expect(variants[16]).toBe("JuplendSwitchboardPull");
+  });
+
+  it("a variant-16 (JuplendSwitchboardPull) bank decodes under 0.1.8 — fail-before/pass-after the retarget", async () => {
+    const idl018 = (
+      await vi.importActual<{ default: object & { accounts: Array<{ name: string; discriminator: number[] }> } }>(
+        "@mrgnlabs/marginfi-client-v2/dist/idl/marginfi_0.1.8.json",
+      )
+    ).default;
+    const idl017 = (
+      await vi.importActual<{ default: object & { accounts: Array<{ name: string; discriminator: number[] }> } }>(
+        "@mrgnlabs/marginfi-client-v2/dist/idl/marginfi_0.1.7.json",
+      )
+    ).default;
+
+    const coder018 = await makeAccountsCoder(idl018);
+    const coder017 = await makeAccountsCoder(idl017);
+    const buf = bankBufferWithOracleSetup(idl018, 16);
+
+    // PASS-AFTER: the retargeted (0.1.8) decode succeeds and names the
+    // wider variant.
+    const decoded = coder018.decode("bank", buf);
+    expect(Object.keys(decoded.config.oracleSetup)[0]).toBe(
+      "juplendSwitchboardPull",
+    );
+
+    // FAIL-BEFORE: the SDK-default (0.1.7) coder throws the exact opaque
+    // error issue #156 reported. If the production code regressed to
+    // 0.1.7, the variant-16 bank would hit precisely this and be dropped
+    // at step=decode.
+    expect(() => coder017.decode("bank", buf)).toThrow(
+      /Cannot read properties of null \(reading 'property'\)/,
+    );
+  });
+
+  it("a variant-15 (JuplendPythPull) bank also decodes under 0.1.8", async () => {
+    const idl018 = (
+      await vi.importActual<{ default: object & { accounts: Array<{ name: string; discriminator: number[] }> } }>(
+        "@mrgnlabs/marginfi-client-v2/dist/idl/marginfi_0.1.8.json",
+      )
+    ).default;
+    const coder018 = await makeAccountsCoder(idl018);
+    const buf = bankBufferWithOracleSetup(idl018, 15);
+    const decoded = coder018.decode("bank", buf);
+    expect(Object.keys(decoded.config.oracleSetup)[0]).toBe("juplendPythPull");
+  });
+
+  /**
+   * Wiring falsifier: prove the PRODUCTION `hardenedFetchGroupData` routes
+   * the Bank decode through the 0.1.8 coder. We inject the real 0.1.8 coder
+   * via the test hook (production fetches it from `getBank018DecodeProgram`),
+   * feed a real variant-16 bank buffer, and assert it is NOT recorded as a
+   * decode skip. If production regressed to decoding via the SDK-default
+   * `program.coder` (0.1.7), the injected coder would be bypassed and the
+   * variant-16 bank would land in the skip log at step=decode.
+   */
+  it("hardenedFetchGroupData decodes a variant-16 bank without a decode skip (wiring)", async () => {
+    const idl018 = (
+      await vi.importActual<{ default: object & { accounts: Array<{ name: string; discriminator: number[] }> } }>(
+        "@mrgnlabs/marginfi-client-v2/dist/idl/marginfi_0.1.8.json",
+      )
+    ).default;
+    const realAccountsCoder = await makeAccountsCoder(idl018);
+
+    const marginfi = await import("../src/modules/solana/marginfi.js");
+    marginfi.__clearMarginfiGroupDiagnostics();
+    // Inject the REAL 0.1.8 coder — this is what production resolves to via
+    // getBank018DecodeProgram (the global @coral-xyz/anchor mock otherwise
+    // breaks the real build, so the hook stands in for it). The hook takes
+    // the `{ coder: { accounts } }` shape production reaches through.
+    marginfi.__setBank018DecodeProgramForTest({
+      coder: { accounts: realAccountsCoder },
+    } as never);
+
+    const bankBuf = bankBufferWithOracleSetup(idl018, 16);
+    const getMultipleAccountsInfo = vi
+      .fn()
+      // Bank account data (real variant-16 buffer).
+      .mockResolvedValueOnce([
+        {
+          data: bankBuf,
+          owner: new PublicKey(SYSTEM_PROGRAM),
+          lamports: 1,
+          executable: false,
+        },
+      ])
+      // Group + oracle + mint fetch. One kept bank ⇒ [group, oracle, mint].
+      .mockResolvedValueOnce([
+        { data: Buffer.alloc(128, 0), owner: new PublicKey(SYSTEM_PROGRAM), lamports: 1, executable: false },
+        { data: Buffer.alloc(128, 0), owner: new PublicKey(SYSTEM_PROGRAM), lamports: 1, executable: false },
+        { data: Buffer.alloc(128, 0), owner: new PublicKey(SYSTEM_PROGRAM), lamports: 1, executable: false },
+      ]);
+
+    // Downstream SDK helpers the kept-bank path touches — configure the
+    // module-mocked stubs so the function runs to completion.
+    const mfnMod = await import("@mrgnlabs/marginfi-client-v2");
+    (mfnMod.BankConfig.fromAccountParsed as ReturnType<typeof vi.fn>).mockReturnValue({});
+    (mfnMod.findOracleKey as ReturnType<typeof vi.fn>).mockReturnValue({
+      oracleKey: new PublicKey(SYSTEM_PROGRAM),
+    });
+    (mfnMod.MarginfiGroup.fromBuffer as ReturnType<typeof vi.fn>).mockReturnValue({});
+    (mfnMod.Bank.fromAccountParsed as ReturnType<typeof vi.fn>).mockReturnValue({});
+    (mfnMod.parseOracleSetup as ReturnType<typeof vi.fn>).mockReturnValue("JuplendSwitchboardPull");
+    (mfnMod.parsePriceInfo as ReturnType<typeof vi.fn>).mockReturnValue({});
+
+    const program = {
+      provider: { connection: { getMultipleAccountsInfo } },
+      programId: new PublicKey(SYSTEM_PROGRAM),
+      idl: {},
+    };
+
+    await marginfi.__hardenedFetchGroupDataForTest(
+      program as never,
+      new PublicKey("4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8"),
+      undefined,
+      [BANK_USDC],
+      undefined,
+    );
+
+    const snap = marginfi.getLastMarginfiGroupDiagnostics();
+    expect(snap).not.toBeNull();
+    expect(snap!.addressesFetched).toBe(1);
+    // The variant-16 bank decoded — no decode skip recorded, and it
+    // hydrated into the banks map.
+    const decodeSkips = snap!.records.filter((r) => r.step === "decode");
+    expect(decodeSkips).toHaveLength(0);
+    expect(snap!.banksHydrated).toBe(1);
   });
 });
 
