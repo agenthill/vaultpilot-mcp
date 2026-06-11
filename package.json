@@ -143,7 +143,7 @@
     "@lifi/sdk": "^3.16.3",
     "@marinade.finance/marinade-ts-sdk": "^5.0.18",
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "@mrgnlabs/marginfi-client-v2": "^6.4.1",
+    "@mrgnlabs/marginfi-client-v2": "^6.4.2",
     "@noble/hashes": "^1.5.0",
     "@pythnetwork/client": "^2.22.1",
     "@safe-global/api-kit": "^4.1.0",

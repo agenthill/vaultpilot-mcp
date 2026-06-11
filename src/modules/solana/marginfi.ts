@@ -108,7 +108,7 @@ function resolveMintDecimals(mint: string): number | null {
 }
 
 /**
- * Derive a wallet's deterministic MarginfiAccount PDA. Seeds per IDL 0.1.7:
+ * Derive a wallet's deterministic MarginfiAccount PDA. Seeds per IDL 0.1.8:
  * ["marginfi_account", group, authority, account_index (u16 LE), third_party_id (u16 LE)].
  *
  * `accountIndex` lets one wallet own multiple MarginfiAccounts (most users
@@ -224,7 +224,7 @@ function recordSkip(
 }
 
 /**
- * Recover a bank's mint from the raw account data at IDL 0.1.7's known
+ * Recover a bank's mint from the raw account data at IDL 0.1.8's known
  * offset (8-byte discriminator + 32-byte mint pubkey). Lets us attribute a
  * `decode`-step skip to a mint even when the Borsh layout is blind.
  *
@@ -255,7 +255,7 @@ async function getMarginfiClient(
   const config = getConfig("production");
   const wallet = makeStubWallet(authority);
   // Pass our hardened fetchGroupData so a single bank with a layout the
-  // bundled IDL 0.1.7 can't decode doesn't blow up the whole client load
+  // bundled IDL 0.1.8 can't decode doesn't blow up the whole client load
   // (issue #105 — `program.account.bank.all()` inside the SDK's default
   // path throws `Cannot read properties of null (reading 'property')`
   // when any on-chain Bank has a new field the IDL is blind to).
@@ -275,7 +275,7 @@ async function getMarginfiClient(
  * per-bank / per-oracle decode failures. The default path calls
  * `program.account.bank.all([filter])`, which internally runs
  * `coder.accounts.decode` on every Bank account in one go — if even one
- * has a layout the bundled IDL (0.1.7) doesn't understand (MarginFi has
+ * has a layout the bundled IDL (0.1.8) doesn't understand (MarginFi has
  * shipped on-chain changes faster than the SDK versions), the entire
  * client load fails with the opaque `null.property` runtime error.
  *
@@ -326,6 +326,74 @@ async function chunkedGetAccountInfosWithNulls(
   return out;
 }
 
+/**
+ * Account-decode coder built from MarginFi IDL **0.1.8** (18 OracleSetup
+ * variants), used for the Bank-account Borsh decode in
+ * `hardenedFetchGroupData`.
+ *
+ * Why not the SDK-default `program.coder`: marginfi-client-v2 6.4.2 ships
+ * `marginfi_0.1.8.json` but STILL exports `MARGINFI_IDL` = 0.1.7 (see
+ * `dist/idl/index.js`), so the `program` the SDK hands our override is
+ * built from the 0.1.7 IDL — which only knows 13 OracleSetup variants and
+ * throws `Cannot read properties of null (reading 'property')` on any bank
+ * whose setup is JuplendPythPull (15) or JuplendSwitchboardPull (16). That
+ * silently drops ~7 mainnet banks (USDC/USDT/SOL/USDS/JupSOL) at
+ * step=decode (issue #156).
+ *
+ * Layout-safety: the `Bank` account is 1856 bytes in BOTH 0.1.7 and 0.1.8,
+ * and `BankConfig` (which carries `oracleSetup`) is byte-identical between
+ * them. 0.1.8 only re-interprets 0.1.7's trailing reserved `_padding_1`
+ * (208 bytes) as `rate_limiter` + `_pad_0` + a shorter `_padding_1` — same
+ * total size, previously-zeroed bytes. So decoding a real on-chain bank
+ * with the 0.1.8 coder yields the same `config`/`mint`/etc. fields the
+ * 0.1.7 coder did, plus it understands the wider enum.
+ *
+ * Cached per-process: the coder is pure (no connection/provider state), so
+ * one instance serves every group/wallet.
+ */
+interface BankDecodeCoder {
+  coder: { accounts: { decode(name: string, data: Buffer): unknown } };
+}
+let bankDecodeProgram018: BankDecodeCoder | null = null;
+async function getBank018DecodeProgram(): Promise<BankDecodeCoder> {
+  if (bankDecodeProgram018) return bankDecodeProgram018;
+  const { Program } = await import("@coral-xyz/anchor");
+  // Dynamic import of the 0.1.8 IDL JSON — matches this module's
+  // dynamic-import style for the whole SDK surface and avoids a static
+  // JSON import from node_modules (outside tsconfig `rootDir`).
+  const idlMod = await import(
+    "@mrgnlabs/marginfi-client-v2/dist/idl/marginfi_0.1.8.json",
+    { with: { type: "json" } }
+  );
+  const idl018 = (idlMod as { default?: unknown }).default ?? idlMod;
+  // A full Anchor `Program` (not a free-standing BorshAccountsCoder)
+  // camelCases account-layout keys, so the decode call below uses the
+  // lowercase `"bank"` key — identical to the SDK's default path and the
+  // shape the issue-#108 guard test pins. We pass a stub provider: account
+  // decoding never touches the connection.
+  const program = new Program(
+    { ...(idl018 as object), address: MAINNET_PROGRAM_ID.toBase58() } as never,
+    { connection: {}, publicKey: undefined } as never,
+  );
+  bankDecodeProgram018 = program as unknown as BankDecodeCoder;
+  return bankDecodeProgram018;
+}
+
+/**
+ * Test-only: inject the bank-decode coder so unit tests that mock
+ * `@coral-xyz/anchor` (the whole module) can still drive the decode step
+ * — production builds the real 0.1.8 coder via `getBank018DecodeProgram`,
+ * which a global anchor mock would otherwise break.
+ */
+export function __setBank018DecodeProgramForTest(coder: BankDecodeCoder): void {
+  bankDecodeProgram018 = coder;
+}
+
+/** Test-only: drop the cached 0.1.8 decode program (vitest beforeEach). */
+export function __clearBank018DecodeProgram(): void {
+  bankDecodeProgram018 = null;
+}
+
 async function hardenedFetchGroupData(
   program: unknown,
   groupAddress: PublicKey,
@@ -369,25 +437,13 @@ async function hardenedFetchGroupData(
     wrappedI80F48toBigNumber: (w: unknown) => unknown;
   };
 
+  // The SDK-built `program` is used only for the connection, the program
+  // id, and `idl` (passed to MarginfiGroup.fromBuffer — group layout is
+  // unaffected by the OracleSetup change, so the bundled 0.1.7 idl is fine
+  // there). Bank-account decoding does NOT use `program.coder`; it uses the
+  // dedicated 0.1.8 coder from getBank018DecodeProgram (issue #156).
   const p = program as {
     provider: { connection: Connection };
-    // `program.coder` is a BorshCoder (top-level facade). Account decoding
-    // goes through the namespaced accounts coder: `coder.accounts.decode`.
-    //
-    // History: issue #105 fixed a coder.accounts.decode → coder.accounts
-    // nil-deref in a now-superseded SDK; commit 44408ed then "verified"
-    // the API by probing BorshAccountsCoder in isolation (which DOES have
-    // a top-level .decode), concluded program.coder had the same shape,
-    // and flattened the call to `coder.decode("Bank", data)`. That probe
-    // was checking the wrong object: `new Program(idl, provider).coder`
-    // is a `BorshCoder` (with .accounts / .instruction / .events / .types
-    // — no top-level .decode), whereas a free-standing `BorshAccountsCoder`
-    // exposes .decode because IT IS the accounts coder. The flattened
-    // call produced "p.coder.decode is not a function" for every bank
-    // (issue #108 — 188/188 banks skipped at step=decode). The guard test
-    // in `solana-marginfi.test.ts` now instantiates a real Anchor
-    // Program so the shape check can't drift again.
-    coder: { accounts: { decode(name: string, data: Buffer): unknown } };
     programId: PublicKey;
     idl: unknown;
   };
@@ -424,19 +480,26 @@ async function hardenedFetchGroupData(
   const bankDatasKeyed: BankDatum[] = [];
   const skipRecords: MarginfiBankSkipRecord[] = [];
   let skippedIntegrator = 0;
+  // Decode banks with the IDL-0.1.8 coder, NOT the SDK-default
+  // `program.coder` (0.1.7). The SDK's `MARGINFI_IDL` is still 0.1.7 even
+  // in 6.4.2, so its coder throws on OracleSetup variants 15/16 (issue
+  // #156). 0.1.8's `Bank` layout is byte-compatible (see
+  // getBank018DecodeProgram), so the decoded fields are identical apart
+  // from the wider enum.
+  const decodeProgram = await getBank018DecodeProgram();
   for (let i = 0; i < addresses.length; i++) {
     const ai = bankAis[i];
     if (!ai) continue;
     const address = addresses[i]!;
     try {
-      // IDL 0.1.7 names the account "Bank" (PascalCase — see accounts[].name
-      // in marginfi_0.1.7.json), but Anchor camelCases account-layout keys
+      // IDL 0.1.8 names the account "Bank" (PascalCase — see accounts[].name
+      // in marginfi_0.1.8.json), but Anchor camelCases account-layout keys
       // when constructing the `BorshAccountsCoder` (live-probed against
       // `@coral-xyz/anchor@0.30.1`: `program.coder.accounts.accountLayouts`
       // contains `"bank"`, not `"Bank"`). So the key here matches
       // `program.account.bank` — the same shape the SDK's default path
       // uses internally.
-      const decoded = p.coder.accounts.decode(
+      const decoded = decodeProgram.coder.accounts.decode(
         "bank",
         ai.data,
       ) as BankDecodedLike;
@@ -773,7 +836,7 @@ function findBankForMint(client: unknown, mint: string): MinimalBank {
           `skipped by the hardened client load at step "${skipped.step}" (bank ${skipped.address}). ` +
           `Reason: ${skipped.reason}. This usually means MarginFi shipped an on-chain ` +
           `change (new risk tier, operational state, oracle setup, or asset tag) that the ` +
-          `bundled SDK v6.4.1 / IDL 0.1.7 doesn't yet understand. Workaround: bump @mrgnlabs/marginfi-client-v2 ` +
+          `bundled SDK v6.4.2 / IDL 0.1.8 doesn't yet understand. Workaround: bump @mrgnlabs/marginfi-client-v2 ` +
           `to a release that recognizes the new layout. Full skip log: call get_marginfi_diagnostics.`,
       );
     }
