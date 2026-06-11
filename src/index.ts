@@ -5178,11 +5178,14 @@ async function main() {
     handler(getTokenMetadata)
   );
 
-  registerTool(server, 
+  registerTool(server,
     "resolve_ens_name",
     {
       description:
-        "Resolve an ENS name (e.g. vitalik.eth) to an Ethereum address via mainnet ENS resolver. Returns null if unregistered.",
+        "Resolve an ENS name (e.g. vitalik.eth) to an Ethereum address via mainnet ENS resolver. Returns null if unregistered. " +
+        "SECURITY: ENS resolution is single-sourced through this MCP. The response includes `verificationUrl` (https://app.ens.domains/<name>) and a `singleSourceWarning`. " +
+        "AGENT BEHAVIOR: always surface the verificationUrl and warn the user to cross-check the resolved address in their browser before using it in a send or prepare_* call. " +
+        "Never silently pass the resolved address into a downstream prepare_* tool without first showing the user the address and the verification link.",
       inputSchema: resolveNameInput.shape,
       annotations: {
         title: "Resolve ENS Name",
@@ -5199,7 +5202,10 @@ async function main() {
     "reverse_resolve_ens",
     {
       description:
-        "Reverse-resolve an Ethereum address to its primary ENS name. Returns null if no primary name is set.",
+        "Reverse-resolve an Ethereum address to its primary ENS name. Returns null if no primary name is set. " +
+        "SECURITY: ENS resolution is single-sourced through this MCP. The response includes `verificationUrl` (https://app.ens.domains/<address>) and a `singleSourceWarning`. " +
+        "AGENT BEHAVIOR: always surface the verificationUrl and warn the user to cross-check the result in their browser before trusting it. " +
+        "Never silently use the resolved name (e.g. as a display label) without first surfacing the verificationUrl — a rogue MCP can return any name string, including names of well-known entities, to build false trust.",
       inputSchema: reverseResolveInput.shape,
       annotations: {
         title: "Reverse Resolve ENS",
