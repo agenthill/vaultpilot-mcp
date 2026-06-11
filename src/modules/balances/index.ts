@@ -128,23 +128,64 @@ export async function getTokenMetadata(
 }
 
 /**
+ * Verification URL for ENS forward resolution.
+ * app.ens.domains is a third-party site the user opens in their browser —
+ * a rogue MCP cannot intercept or re-skin it, making this the only
+ * suggestion here that doesn't route through the MCP. (Issue #574, option 1.)
+ */
+function ensForwardVerificationUrl(name: string): string {
+  return `https://app.ens.domains/${encodeURIComponent(name)}`;
+}
+
+/**
+ * Verification URL for ENS reverse resolution.
+ */
+function ensReverseVerificationUrl(address: string): string {
+  return `https://app.ens.domains/${encodeURIComponent(address)}`;
+}
+
+/** Warning text appended to every ENS resolution response. */
+const ENS_SINGLE_SOURCE_WARNING =
+  "ENS resolution is single-sourced through this MCP — verify via verificationUrl before sending funds.";
+
+/**
  * ENS forward resolution: name → address. Only Ethereum mainnet ENS is supported (viem routes
  * through the mainnet resolver even for subdomains used cross-chain).
+ *
+ * Includes a third-party verificationUrl (app.ens.domains) so the user can
+ * cross-check the returned address in their browser independently of this MCP.
+ * (Security hardening per issue #574.)
  */
 export async function resolveName(
   args: ResolveNameArgs
-): Promise<{ name: string; address: `0x${string}` | null }> {
+): Promise<{ name: string; address: `0x${string}` | null; verificationUrl: string; singleSourceWarning: string }> {
   const client = getClient("ethereum");
   const address = await client.getEnsAddress({ name: args.name });
-  return { name: args.name, address };
+  return {
+    name: args.name,
+    address,
+    verificationUrl: ensForwardVerificationUrl(args.name),
+    singleSourceWarning: ENS_SINGLE_SOURCE_WARNING,
+  };
 }
 
-/** ENS reverse resolution: address → primary name. Returns null if the address has no primary name set. */
+/**
+ * ENS reverse resolution: address → primary name. Returns null if the address has no primary name set.
+ *
+ * Includes a third-party verificationUrl (app.ens.domains) so the user can
+ * cross-check the result in their browser independently of this MCP.
+ * (Security hardening per issue #574.)
+ */
 export async function reverseResolve(
   args: ReverseResolveArgs
-): Promise<{ address: `0x${string}`; name: string | null }> {
+): Promise<{ address: `0x${string}`; name: string | null; verificationUrl: string; singleSourceWarning: string }> {
   const client = getClient("ethereum");
   const address = args.address as `0x${string}`;
   const name = await client.getEnsName({ address });
-  return { address, name };
+  return {
+    address,
+    name,
+    verificationUrl: ensReverseVerificationUrl(args.address),
+    singleSourceWarning: ENS_SINGLE_SOURCE_WARNING,
+  };
 }
