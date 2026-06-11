@@ -91,12 +91,11 @@ export async function checkPermissionRisks(
 
   // 2) AccessControl — detect via ABI scan for hasRole function. If present, we can at least note it.
   if (info.abi && Array.isArray(info.abi)) {
-    const hasRoleFn = info.abi.some(
-      (item) =>
-        typeof item === "object" && item !== null &&
-        (item as { name?: string; type?: string }).type === "function" &&
-        (item as { name?: string }).name === "hasRole"
-    );
+    const hasRoleFn = info.abi.some((item) => {
+      if (typeof item !== "object" || !item) return false;
+      const it = item as { type?: string; name?: string };
+      return it.type === "function" && it.name === "hasRole";
+    });
     if (hasRoleFn) {
       notes.push(
         "Contract uses OpenZeppelin AccessControl. Role holders can only be enumerated with specific role hashes " +
