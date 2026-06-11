@@ -312,6 +312,10 @@ export function getVaultPilotConfigStatus(_args: Record<string, never> = {}): Va
     });
   }
 
+  const demoActive = isDemoMode();
+  const liveWallet = getLiveWallet();
+  const enabledProtocols = getEnabledProtocols();
+
   return {
     configPath,
     configFileExists: existsSync(configPath),
@@ -335,20 +339,20 @@ export function getVaultPilotConfigStatus(_args: Record<string, never> = {}): Va
     },
     setupHints,
     demoMode: {
-      active: isDemoMode(),
+      active: demoActive,
       envVar: "VAULTPILOT_DEMO",
-      howToEnable: isDemoMode()
+      howToEnable: demoActive
         ? "Demo mode is active. In default sub-mode, read tools run real chain RPC and signing-class tools refuse. Call `set_demo_wallet({ persona: \"...\" })` to upgrade to live sub-mode — the broadcast step is then simulated against a curated persona's on-chain state. To exit demo mode entirely, drop VAULTPILOT_DEMO from your MCP-client config (e.g. Claude Code's `.claude.json`'s `env` block, or the `--env` flag in `claude mcp add`) and restart the client. Restarting only the MCP server process does NOT clear the env var — the client re-launches the server with the same env on every reconnect."
         : "Set VAULTPILOT_DEMO=true in your MCP-client config and restart the client (e.g. Claude Code). Add via `claude mcp add vaultpilot-mcp --env VAULTPILOT_DEMO=true -- npx -y vaultpilot-mcp` (or edit the existing MCP entry's env). In demo mode, read tools run real chain RPC against any address you pass (RPC keys recommended; falls back to public-fallback endpoints) and signing-class tools refuse. Calling `set_demo_wallet({ persona: \"defi-power-user\" | \"stable-saver\" | \"staking-maxi\" | \"whale\" })` upgrades to live mode where the broadcast step is simulated — no Ledger required.",
       liveMode: {
         active: isLiveMode(),
-        personaId: getLiveWallet()?.personaId ?? null,
-        addresses: getLiveWallet()?.addresses ?? null,
+        personaId: liveWallet?.personaId ?? null,
+        addresses: liveWallet?.addresses ?? null,
       },
     },
     scope: {
       families: [...getEnabledFamilies()].sort(),
-      protocols: getEnabledProtocols() ? [...getEnabledProtocols()!].sort() : null,
+      protocols: enabledProtocols ? [...enabledProtocols].sort() : null,
     },
   };
 }

@@ -22,9 +22,7 @@ export async function verifyLedgerLiveCodesign(
   args: VerifyLedgerLiveCodesignToolArgs = {},
 ): Promise<CodesignResult> {
   try {
-    return await verify({
-      ...(args.binaryPath !== undefined ? { binaryPath: args.binaryPath } : {}),
-    });
+    return await verify({ binaryPath: args.binaryPath });
   } catch (err) {
     const message = (err as Error).message ?? String(err);
     return {
