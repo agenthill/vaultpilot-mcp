@@ -26,6 +26,11 @@ function decodeHexMessage(hex: string): string {
   }
 }
 
+function throwBroadcastRejection(label: string, data: BroadcastResponse): never {
+  const decoded = data.message ? decodeHexMessage(data.message) : "unknown error";
+  throw new Error(`${label}: ${data.code ?? "unknown code"} — ${decoded}`);
+}
+
 /**
  * Encode a base-128 varint per protobuf wire format. TRON's Transaction
  * envelope uses one for each length-delimited field. ~4 bytes max for the
@@ -116,10 +121,7 @@ export async function broadcastTronTx(
     if (data.result === true) {
       return { txID: data.txid ?? tx.txID };
     }
-    const decoded = data.message ? decodeHexMessage(data.message) : "unknown error";
-    throw new Error(
-      `TronGrid /broadcasthex rejected the transaction: ${data.code ?? "unknown code"} — ${decoded}`,
-    );
+    throwBroadcastRejection("TronGrid /broadcasthex rejected the transaction", data);
   }
 
   const body = {
@@ -143,10 +145,7 @@ export async function broadcastTronTx(
   if (data.result === true) {
     return { txID: data.txid ?? tx.txID };
   }
-  const decoded = data.message ? decodeHexMessage(data.message) : "unknown error";
-  throw new Error(
-    `TronGrid broadcast rejected the transaction: ${data.code ?? "unknown code"} — ${decoded}`
-  );
+  throwBroadcastRejection("TronGrid broadcast rejected the transaction", data);
 }
 
 // Internal export for tests. The signed-tx-hex builder is pure, no I/O,

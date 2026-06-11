@@ -555,23 +555,16 @@ export async function buildTronTrc20Approve(
   // 10^12-fold larger spend than intended, and there's no UX recovery
   // from that on a Ledger blind-sign flow.
   const canonicalSymbol = SYMBOL_BY_CONTRACT[args.token];
-  let decimals: number;
-  let symbolForDescription: string;
-  if (canonicalSymbol) {
-    decimals = TOKEN_DECIMALS[canonicalSymbol];
-    symbolForDescription = canonicalSymbol;
-  } else {
-    if (args.decimals === undefined) {
-      throw new Error(
-        `Token ${args.token} is not in the canonical TRC-20 set (USDT/USDC/USDD/TUSD). ` +
-          `Pass an explicit \`decimals\` argument — we refuse to guess decimals on approve ` +
-          `because an off-by-power-of-ten allowance silently authorizes a vastly larger ` +
-          `spend than intended.`,
-      );
-    }
-    decimals = args.decimals;
-    symbolForDescription = `TRC-20 ${args.token}`;
+  if (!canonicalSymbol && args.decimals === undefined) {
+    throw new Error(
+      `Token ${args.token} is not in the canonical TRC-20 set (USDT/USDC/USDD/TUSD). ` +
+        `Pass an explicit \`decimals\` argument — we refuse to guess decimals on approve ` +
+        `because an off-by-power-of-ten allowance silently authorizes a vastly larger ` +
+        `spend than intended.`,
+    );
   }
+  const decimals = canonicalSymbol ? TOKEN_DECIMALS[canonicalSymbol] : args.decimals!;
+  const symbolForDescription = canonicalSymbol ?? `TRC-20 ${args.token}`;
 
   const amountBase = parseUnits(args.amount, decimals);
   if (amountBase <= 0n) {
