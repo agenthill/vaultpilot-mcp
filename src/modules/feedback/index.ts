@@ -57,9 +57,7 @@ export async function requestCapability(args: RequestCapabilityArgs) {
   const check = checkAndRecord(hash);
   if (!check.ok) {
     const err = new Error(check.reason) as Error & { retryAfterSeconds?: number };
-    if ("retryAfterSeconds" in check && check.retryAfterSeconds !== undefined) {
-      err.retryAfterSeconds = check.retryAfterSeconds;
-    }
+    if ("retryAfterSeconds" in check) err.retryAfterSeconds = check.retryAfterSeconds;
     throw err;
   }
 
@@ -181,13 +179,10 @@ function shellSingleQuote(s: string): string {
  * that would interpret part of the body as shell text.
  */
 function buildGhCommand(payload: IssuePayload): string {
-  const bodyLines = payload.body.split("\n");
-  for (const line of bodyLines) {
-    if (line.trim() === GH_HEREDOC_TAG) {
-      throw new Error(
-        `Body contains the HEREDOC terminator '${GH_HEREDOC_TAG}' as a standalone line; cannot safely embed in a gh issue create snippet. Fall back to the issueUrl path or trim the body.`,
-      );
-    }
+  if (payload.body.split("\n").some((line) => line.trim() === GH_HEREDOC_TAG)) {
+    throw new Error(
+      `Body contains the HEREDOC terminator '${GH_HEREDOC_TAG}' as a standalone line; cannot safely embed in a gh issue create snippet. Fall back to the issueUrl path or trim the body.`,
+    );
   }
   const cmdHead = [
     "gh issue create \\",
