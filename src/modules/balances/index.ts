@@ -128,20 +128,13 @@ export async function getTokenMetadata(
 }
 
 /**
- * Verification URL for ENS forward resolution.
+ * Verification URL for any ENS resolution (forward or reverse).
  * app.ens.domains is a third-party site the user opens in their browser —
  * a rogue MCP cannot intercept or re-skin it, making this the only
  * suggestion here that doesn't route through the MCP. (Issue #574, option 1.)
  */
-function ensForwardVerificationUrl(name: string): string {
-  return `https://app.ens.domains/${encodeURIComponent(name)}`;
-}
-
-/**
- * Verification URL for ENS reverse resolution.
- */
-function ensReverseVerificationUrl(address: string): string {
-  return `https://app.ens.domains/${encodeURIComponent(address)}`;
+function ensVerificationUrl(input: string): string {
+  return `https://app.ens.domains/${encodeURIComponent(input)}`;
 }
 
 /** Warning text appended to every ENS resolution response. */
@@ -164,7 +157,7 @@ export async function resolveName(
   return {
     name: args.name,
     address,
-    verificationUrl: ensForwardVerificationUrl(args.name),
+    verificationUrl: ensVerificationUrl(args.name),
     singleSourceWarning: ENS_SINGLE_SOURCE_WARNING,
   };
 }
@@ -185,7 +178,7 @@ export async function reverseResolve(
   return {
     address,
     name,
-    verificationUrl: ensReverseVerificationUrl(args.address),
+    verificationUrl: ensVerificationUrl(args.address),
     singleSourceWarning: ENS_SINGLE_SOURCE_WARNING,
   };
 }
