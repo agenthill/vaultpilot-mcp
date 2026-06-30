@@ -25,6 +25,7 @@
 - Apply at protocol-add design time, before scope is locked. If a proposed `prepare_custom_call`-only path meets any criterion, push back with the specific criterion named; if a proposed `prepare_*` meets none, push back with "this belongs on the generic path." Adopted from research deliverable [#645](https://github.com/szhygulin/vaultpilot-mcp/issues/645) (parent [#638](https://github.com/szhygulin/vaultpilot-mcp/issues/638)). Complementary to `VAULTPILOT_PROTOCOLS` ([#492](https://github.com/szhygulin/vaultpilot-mcp/issues/492) — catalog-growth lever, not a cutoff replacement).
 
 ## Git/PR Workflow — project-specific
+- Keep this clone (`/home/szhygulin/dev/recon-mcp`) checked out to `main` at all times — the live `vaultpilot-mcp` server runs from its `dist/` (built from `main`). Do all feature/fix work in worktrees under `.claude/worktrees/<branch-name>`; never `git checkout` a feature branch in this clone. If a checkout is unavoidable (e.g. a build/test from another branch), return to `main` immediately after.
 - Repo root: `/home/szhygulin/dev/recon-mcp`. Worktree path template: `.claude/worktrees/<branch-name>` (relative). Past incidents 2026-04-28 of nested worktrees from a chained `cd` not landing back at the repo root: SunSwap → readme-roadmap, pnl-mtd → claude-md-close-keyword. Run `pwd` after `cd /home/szhygulin/dev/recon-mcp` if uncertain.
 - Default base for new branches: `origin/main`. No stacking — the global "branch every new PR off the base branch" rule applies; second-to-merge resolves at PR time via rebase + `--force-with-lease`.
 
