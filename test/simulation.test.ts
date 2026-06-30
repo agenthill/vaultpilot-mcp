@@ -189,7 +189,7 @@ describe("preview_send runs guards and pins fees; send_transaction consumes the 
     expect(preview.preSignHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(preview.pinned).toEqual({
       nonce: 7,
-      // baseFee * 2 + max(priority, 0.5 gwei) = 20 gwei + 2 gwei = 22 gwei
+      // baseFee * 2 + max(priority, 0.05 gwei) = 20 gwei + 2 gwei = 22 gwei
       maxFeePerGas: 22_000_000_000n.toString(),
       maxPriorityFeePerGas: 2_000_000_000n.toString(),
       gas: 21_000n.toString(),
@@ -221,7 +221,7 @@ describe("preview_send runs guards and pins fees; send_transaction consumes the 
     expect(result.valueWei).toBe("500000000000000000");
   });
 
-  it("priority-fee floor: bumps to 0.5 gwei when node estimate is lower", async () => {
+  it("priority-fee floor: bumps to 0.05 gwei when node estimate is lower", async () => {
     const requestSendMock = vi.fn().mockResolvedValue("0xabc");
     vi.doMock("../src/signing/walletconnect.js", () => ({
       requestSendTransaction: requestSendMock,
@@ -257,9 +257,9 @@ describe("preview_send runs guards and pins fees; send_transaction consumes the 
 
     const { previewSend } = await import("../src/modules/execution/index.js");
     const preview = await previewSend({ handle: stamped.handle! });
-    // Floor applied: priority clamped to 0.5 gwei, maxFee = 5*2 + 0.5 = 10.5 gwei.
-    expect(preview.pinned.maxPriorityFeePerGas).toBe("500000000");
-    expect(preview.pinned.maxFeePerGas).toBe("10500000000");
+    // Floor applied: priority clamped to 0.05 gwei, maxFee = 5*2 + 0.05 = 10.05 gwei.
+    expect(preview.pinned.maxPriorityFeePerGas).toBe("50000000");
+    expect(preview.pinned.maxFeePerGas).toBe("10050000000");
   });
 });
 
