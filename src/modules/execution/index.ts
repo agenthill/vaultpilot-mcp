@@ -2941,10 +2941,12 @@ async function sendTronTransaction(args: SendTransactionArgs): Promise<{
  * Minimum priority fee floor in wei. viem's `estimateFeesPerGas` returns the
  * node's priority-fee estimate, which on quiet blocks can drop below what
  * mempool-aware miners actually include (observed: 20 mwei on Ethereum at
- * 14:00 UTC while the inclusion floor was ~1 gwei). Floor at 0.5 gwei so a
- * tx we pinned during a lull doesn't sit stuck when activity picks up.
+ * 14:00 UTC while the inclusion floor was ~1 gwei). Floor at 0.05 gwei so a
+ * tx we pinned during a lull doesn't sit stuck when activity picks up,
+ * without over-tipping ~8x on a near-empty mempool (e.g. a 0.5 gwei floor
+ * on a 0.07 gwei base fee).
  */
-const MIN_PRIORITY_FEE_WEI = 500_000_000n;
+const MIN_PRIORITY_FEE_WEI = 50_000_000n;
 
 /**
  * Multiplier applied to `baseFeePerGas` before adding priority fee. viem's
