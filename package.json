@@ -192,6 +192,9 @@
     },
     "bs58check": {
       "bs58": "^5.0.0"
+    },
+    "jayson": {
+      "ws": "^7.5.11"
     }
   },
   "pnpm": {
@@ -208,7 +211,8 @@
       "@ledgerhq/hw-app-btc>bs58": "^5.0.0",
       "bs58@5>base-x": "^3.0.0",
       "bs58check@2>base-x": "^3.0.0",
-      "bs58check>bs58": "^5.0.0"
+      "bs58check>bs58": "^5.0.0",
+      "jayson>ws": "^7.5.11"
     }
   },
   "engines": {
