@@ -331,6 +331,7 @@ describe("pair_ledger_tron + get_ledger_status", () => {
       getCurrentSession: () => null,
       getConnectedAccountsDetailed: async () => [],
       isPeerUnreachable: () => false,
+      getLastPairingError: () => null,
     }));
     const { pairLedgerTron } = await import("../src/modules/execution/index.js");
     const { getSessionStatus } = await import("../src/signing/session.js");
@@ -358,6 +359,7 @@ describe("pair_ledger_tron + get_ledger_status", () => {
       getCurrentSession: () => null,
       getConnectedAccountsDetailed: async () => [],
       isPeerUnreachable: () => false,
+      getLastPairingError: () => null,
     }));
     // First pair returns DEVICE_ADDRESS (account 0); second returns OTHER_ADDRESS (account 1).
     installStubs();

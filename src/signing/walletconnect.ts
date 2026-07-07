@@ -122,6 +122,42 @@ let currentSession: SessionTypes.Struct | null = null;
 let peerUnreachable = false;
 
 /**
+ * Terminal error from the most recent WalletConnect pairing attempt (issue
+ * #687). The pairing tool (`pair_ledger_live`) returns `waitingForApproval:
+ * true` and then treats the settle-capture promise as fire-and-forget. If
+ * that promise REJECTS (relay never delivered the settled session, invalid
+ * projectId, approval rejected on-device) the prior code swallowed the error
+ * and `currentSession` stayed null forever — indistinguishable from a
+ * never-paired state in `get_ledger_status`. We now record the rejection here
+ * (with a timestamp) so `getSessionStatus` can surface a real terminal error
+ * and prompt a re-pair. Cleared at the start of a fresh `initiatePairing` and
+ * on any successful `adoptSession`.
+ */
+export interface PairingError {
+  /** Human-readable failure reason (the rejection's `.message`, or `String(err)`). */
+  message: string;
+  /** Epoch milliseconds when the pairing rejection was captured. */
+  at: number;
+}
+let lastPairingError: PairingError | null = null;
+
+export function getLastPairingError(): PairingError | null {
+  return lastPairingError;
+}
+
+/**
+ * Structured stderr logging for WalletConnect relay + session-lifecycle
+ * events (issue #687). Before this the module emitted zero WC logs, so the
+ * "settle never delivered" failure mode (relay idle-drop, invalid projectId,
+ * an approval promise that never resolves) was undiagnosable from the server
+ * logs. Goes to stderr to stay off the MCP stdio (JSON-RPC) channel.
+ */
+function wcLog(...args: unknown[]): void {
+  // eslint-disable-next-line no-console
+  console.error("[wc]", ...args);
+}
+
+/**
  * Run the Ledger Live peer pin against `session`. Logs a loud warning
  * on mismatch — non-blocking, so a legitimate-but-unusual peer (dev
  * build, self-built Ledger Live) doesn't brick signing. The user
@@ -134,6 +170,38 @@ function applyPeerPin(session: SessionTypes.Struct): PeerPinResult {
     console.warn(`[vaultpilot wc-peer-pin] ${result.message}`);
   }
   return result;
+}
+
+/**
+ * Durably adopt a freshly-settled WalletConnect session as the current one.
+ * Issue #687: this capture logic used to live ONLY inside the fire-and-forget
+ * approval-promise IIFE in `initiatePairing`. If that promise rejected or
+ * never resolved (relay idle-drop, invalid projectId), the settled session
+ * was never persisted and `get_ledger_status` reported `paired: false`
+ * forever. The same logic is now shared between the approval IIFE AND the
+ * durable `session_connect` SDK listener wired in `getSignClient`, so the
+ * event path can persist the session even when the promise path is dead.
+ *
+ * Idempotent: a no-op when we already hold this exact topic, so double
+ * capture (promise + event both firing for the same settle) is safe and
+ * doesn't restart the keepalive or re-patch the config.
+ */
+function adoptSession(
+  c: InstanceType<typeof SignClient>,
+  session: SessionTypes.Struct,
+): void {
+  if (currentSession?.topic === session.topic) return;
+  currentSession = session;
+  peerUnreachable = false;
+  lastPairingError = null;
+  applyPeerPin(session);
+  patchUserConfig({
+    walletConnect: {
+      sessionTopic: session.topic,
+      pairingTopic: session.pairingTopic,
+    },
+  });
+  startKeepalive(c, session.topic);
 }
 
 /**
@@ -213,6 +281,36 @@ export async function getSignClient(): Promise<InstanceType<typeof SignClient>> 
     });
   }
 
+  // Non-null local capture: `client` is a mutable module-level var, so TS
+  // widens it back to `| null` inside the async listener closures below even
+  // though it was just assigned. `sc` pins the non-null reference for them.
+  const sc = client;
+
+  // Relay + lifecycle logging to stderr (issue #687). The relay transport
+  // sits under `client.core.relayer` and emits connect/disconnect/error as
+  // the websocket to the WC relay comes and goes. When a settle is "never
+  // delivered", these lines are what distinguish a relay idle-drop from an
+  // invalid projectId from a peer that simply never approved — previously
+  // invisible. Registered once per client init; the relayer is an EventEmitter
+  // (IEvents) so `.on` takes plain string event names.
+  sc.core.relayer.on("relayer_connect", () => wcLog("relayer_connect"));
+  sc.core.relayer.on("relayer_disconnect", () => wcLog("relayer_disconnect"));
+  sc.core.relayer.on("relayer_error", (err: unknown) =>
+    wcLog("relayer_error", err),
+  );
+
+  // Durable settle capture (issue #687). The dapp-side `session_connect`
+  // event fires with `{ session }` when a proposed session settles — this is
+  // the authoritative, promise-independent signal that pairing succeeded.
+  // `initiatePairing` also captures via its approval promise, but that path
+  // is fire-and-forget and dies silently on rejection / non-resolution.
+  // `adoptSession` is idempotent, so both paths firing for the same settle is
+  // safe.
+  sc.on("session_connect", ({ session }) => {
+    wcLog("session_connect topic=" + session.topic);
+    adoptSession(sc, session);
+  });
+
   // Wire SDK lifecycle events. These are the ONLY paths that clear the
   // local session record (issue #241): probe outcomes are liveness UX,
   // not lifecycle authority. `session_delete` fires when the peer or relay
@@ -221,10 +319,12 @@ export async function getSignClient(): Promise<InstanceType<typeof SignClient>> 
   // session intact so closing/reopening the WalletConnect subapp inside
   // Ledger Live resumes without a re-pair.
   client.on("session_delete", ({ topic }) => {
+    wcLog("session_delete topic=" + topic);
     if (currentSession?.topic !== topic) return;
     handleSessionEndedByPeer();
   });
   client.on("session_expire", ({ topic }) => {
+    wcLog("session_expire topic=" + topic);
     if (currentSession?.topic !== topic) return;
     handleSessionEndedByPeer();
   });
@@ -401,23 +501,33 @@ export interface PairResult {
 /** Create a new pairing + session proposal. The returned URI is what the user scans in Ledger Live. */
 export async function initiatePairing(): Promise<PairResult> {
   const c = await getSignClient();
+  // A fresh pairing attempt supersedes any prior terminal failure — clear it
+  // so a stale error from an earlier attempt doesn't leak into this one's
+  // get_ledger_status (issue #687).
+  lastPairingError = null;
   const { uri, approval } = await c.connect({ requiredNamespaces: REQUIRED_NAMESPACES });
   if (!uri) throw new Error("WalletConnect did not return a pairing URI.");
   return {
     uri,
     approval: (async () => {
-      const session = await approval();
-      currentSession = session;
-      peerUnreachable = false;
-      applyPeerPin(session);
-      patchUserConfig({
-        walletConnect: {
-          sessionTopic: session.topic,
-          pairingTopic: session.pairingTopic,
-        },
-      });
-      startKeepalive(c, session.topic);
-      return session;
+      try {
+        const session = await approval();
+        adoptSession(c, session);
+        return session;
+      } catch (err) {
+        // Issue #687: the caller (`pairLedgerLive`) treats this promise as
+        // fire-and-forget. Record the terminal failure instead of letting it
+        // vanish, so `get_ledger_status` can report it rather than an eternal
+        // `paired: false` that looks like the user never paired. The durable
+        // `session_connect` listener may still adopt a session out-of-band; if
+        // it does, `adoptSession` clears this error.
+        lastPairingError = {
+          message: err instanceof Error ? err.message : String(err),
+          at: Date.now(),
+        };
+        wcLog("pairing approval rejected:", lastPairingError.message);
+        throw err;
+      }
     })(),
   };
 }

@@ -213,10 +213,15 @@ describe("keepalive ping — issue #241", () => {
       "utf8",
     );
     // Both code paths that produce a session must start the keepalive.
+    // Issue #687: the pairing path now routes capture through the shared
+    // `adoptSession` helper (so the durable `session_connect` listener reuses
+    // the same logic), and `adoptSession` is what starts the keepalive.
     const initiateBlock = src.match(
       /const session = await approval\(\);[\s\S]*?return session;/,
     );
-    expect(initiateBlock?.[0]).toMatch(/startKeepalive\(c,\s*session\.topic\)/);
+    expect(initiateBlock?.[0]).toMatch(/adoptSession\(c,\s*session\)/);
+    const adoptFn = src.match(/function adoptSession\([\s\S]*?\n\}/);
+    expect(adoptFn?.[0]).toMatch(/startKeepalive\(c,\s*session\.topic\)/);
     const startupBlock = src.match(
       /Verify the restored session is currently reachable[\s\S]*?return client;/,
     );

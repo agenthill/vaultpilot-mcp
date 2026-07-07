@@ -1,8 +1,10 @@
 import {
   getConnectedAccountsDetailed,
   getCurrentSession,
+  getLastPairingError,
   getSignClient,
   isPeerUnreachable,
+  type PairingError,
 } from "./walletconnect.js";
 import { getPairedTronAddresses } from "./tron-usb-signer.js";
 import { getPairedSolanaAddresses } from "./solana-usb-signer.js";
@@ -80,6 +82,25 @@ export interface SessionStatus {
    */
   peerUnreachableGuidance?: string;
   /**
+   * Populated when the most recent WalletConnect pairing attempt's
+   * settle-capture promise REJECTED (issue #687). Distinguishes a genuine
+   * terminal pairing failure (the relay never delivered the settled session,
+   * an invalid projectId, an on-device rejection) from a fresh never-paired
+   * state — both otherwise present as `paired: false`. The pairing tool
+   * returns `waitingForApproval: true` and then goes fire-and-forget, so
+   * without this field a rejected settle leaves `get_ledger_status`
+   * indefinitely reporting an unpaired state that looks like the user simply
+   * hasn't paired yet. When present, surface the error and offer a re-pair.
+   * Cleared once a session is successfully adopted (promise or the durable
+   * `session_connect` event).
+   */
+  lastPairingError?: PairingError;
+  /**
+   * Actionable guidance, populated only alongside `lastPairingError`. Kept as
+   * a string next to the flag so the agent can splice it verbatim.
+   */
+  lastPairingErrorGuidance?: string;
+  /**
    * Present when the user has run `pair_ledger_tron` at least once. TRON
    * doesn't share WalletConnect with EVM — signing goes over USB HID — so
    * this section is independent of the `paired`/`accounts` fields above
@@ -153,6 +174,14 @@ export const PEER_TRUST_WARNING =
   "The paired wallet/URL above is NOT on the Ledger-first-party allowlist; ask the user " +
   "to confirm before calling send_transaction. The ultimate check is that the tx shows up on the " +
   "user's physical Ledger device for on-screen approval.";
+
+export const LAST_PAIRING_ERROR_GUIDANCE =
+  "The most recent WalletConnect pairing attempt failed AFTER the URI/QR was shown — " +
+  "Ledger Live's approval never reached this server (relay dropped the settled session, " +
+  "an invalid WalletConnect projectId, or the pairing was rejected on-device). This is a " +
+  "terminal failure, not a still-pending pairing: no session was persisted. " +
+  "Tell the user the pairing did not complete and offer to retry via `pair_ledger_live`. " +
+  "If it keeps failing, check that WALLETCONNECT_PROJECT_ID is set to a valid Cloud project.";
 
 export const PEER_UNREACHABLE_GUIDANCE =
   "WalletConnect session is cached locally but the relay couldn't confirm Ledger Live is currently connected. " +
@@ -240,6 +269,16 @@ export function isKnownLedgerPeer(peerUrl: string | undefined): boolean {
 export async function getSessionStatus(): Promise<SessionStatus> {
   await getSignClient(); // triggers restore + liveness check
   const session = getCurrentSession();
+  // Issue #687: a rejected settle-capture leaves us with no session but a
+  // recorded terminal error. Surface it on both the unpaired and paired
+  // returns (a failed re-pair over a still-live old session is also useful).
+  const pairingError = getLastPairingError();
+  const pairingErrorSection = pairingError
+    ? {
+        lastPairingError: pairingError,
+        lastPairingErrorGuidance: LAST_PAIRING_ERROR_GUIDANCE,
+      }
+    : {};
   const tronPaired = getPairedTronAddresses();
   const tronSection =
     tronPaired.length > 0
@@ -303,6 +342,7 @@ export async function getSessionStatus(): Promise<SessionStatus> {
       accountDetails: [],
       // Unpaired: no peerVersion yet, so instructions are fully generic.
       pairingInstructions: ledgerLivePairingInstructions(undefined),
+      ...pairingErrorSection,
       ...tronSection,
       ...solanaSection,
       ...btcSection,
@@ -334,6 +374,7 @@ export async function getSessionStatus(): Promise<SessionStatus> {
           pairingInstructions: ledgerLivePairingInstructions(version),
         }
       : {}),
+    ...pairingErrorSection,
     ...tronSection,
     ...solanaSection,
     ...btcSection,

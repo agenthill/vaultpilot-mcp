@@ -821,6 +821,7 @@ describe("get_ledger_status — btc section", () => {
       getCurrentSession: () => null,
       getConnectedAccountsDetailed: async () => [],
       isPeerUnreachable: () => false,
+      getLastPairingError: () => null,
     }));
     vi.doMock("../src/signing/btc-usb-loader.js", () => ({
       openLedger: async () => ({
@@ -897,6 +898,7 @@ describe("get_ledger_status — btc section", () => {
       getCurrentSession: () => null,
       getConnectedAccountsDetailed: async () => [],
       isPeerUnreachable: () => false,
+      getLastPairingError: () => null,
     }));
     const { getSessionStatus } = await import("../src/signing/session.js");
     const status = await getSessionStatus();
