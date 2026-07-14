@@ -43,7 +43,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-document: 'https://github.com/szhygulin/vaultpilot-mcp/blob/main/CLA.md'
+          path-to-document: 'https://github.com/szhygulin/vaultpilot-mcp/blob/main/docs/CLA.md'
           path-to-signatures: 'signatures/version1/cla.json'
           branch: 'cla-signatures'
           # Repo owner doesn't sign their own CLA. Dependabot bumps are
@@ -60,7 +60,7 @@ jobs:
           # every time a new bot lands a PR.
           allowlist: 'szhygulin,claude,dependabot[bot],*[bot]'
           custom-notsigned-prcomment: |
-            Thanks for the contribution! Before this PR can be merged, please sign the [Contributor License Agreement](https://github.com/szhygulin/vaultpilot-mcp/blob/main/CLA.md). The CLA grants the project the right to relicense your contribution under future license terms (the project ships under [BUSL-1.1](https://github.com/szhygulin/vaultpilot-mcp/blob/main/LICENSE) today, auto-converting to Apache 2.0 in 2030).
+            Thanks for the contribution! Before this PR can be merged, please sign the [Contributor License Agreement](https://github.com/szhygulin/vaultpilot-mcp/blob/main/docs/CLA.md). The CLA grants the project the right to relicense your contribution under future license terms (the project ships under [BUSL-1.1](https://github.com/szhygulin/vaultpilot-mcp/blob/main/LICENSE) today, auto-converting to Apache 2.0 in 2030).
 
             To sign, **post a new comment on this PR with exactly the following text**:
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'

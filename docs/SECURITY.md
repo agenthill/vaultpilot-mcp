@@ -7,7 +7,7 @@ It documents what you are trusting when you let an AI agent prepare
 transactions against your Ledger device.
 
 For the product overview, install instructions, and tool reference, see the
-main [README](./README.md).
+main [README](../README.md).
 
 ## Why trust VaultPilot?
 

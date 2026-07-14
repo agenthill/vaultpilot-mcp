@@ -63,7 +63,7 @@ export function getUpdateCommand(
     note =
       "Install path could not be detected from process.argv / process.execPath. " +
       "Ask the user how they installed vaultpilot-mcp (npm, bundled binary, source, Docker) " +
-      "and refer to INSTALL.md for the matching update flow.";
+      "and refer to docs/INSTALL.md for the matching update flow.";
   }
 
   return {

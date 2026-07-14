@@ -162,10 +162,10 @@ function detect(): InstallPathInfo {
     kind: "unknown",
     detectedFrom: argv0 || execPath,
     recommendedCommand:
-      "See https://github.com/szhygulin/vaultpilot-mcp/blob/main/INSTALL.md",
+      "See https://github.com/szhygulin/vaultpilot-mcp/blob/main/docs/INSTALL.md",
     noticeInstallBlock: [
-      "         (install path could not be detected — check INSTALL.md)",
-      "         https://github.com/szhygulin/vaultpilot-mcp/blob/main/INSTALL.md",
+      "         (install path could not be detected — check docs/INSTALL.md)",
+      "         https://github.com/szhygulin/vaultpilot-mcp/blob/main/docs/INSTALL.md",
       "         covers npm, bundled-binary, source, and Docker update flows.",
       "         Restart Claude Code after upgrading.",
     ].join("\n"),

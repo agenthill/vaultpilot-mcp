@@ -319,7 +319,7 @@ async function rpcGatedSignals(args: {
   deepReorgFlagBranchlen: number;
 }): Promise<ChainHealthSignal[]> {
   if (args.rpcConfig === null) {
-    const reason = `requires ${args.rpcEnvVarName} (and optional auth — see INSTALL.md). Issue #248.`;
+    const reason = `requires ${args.rpcEnvVarName} (and optional auth — see docs/INSTALL.md). Issue #248.`;
     return [
       { name: "deep_reorg", available: false, reason },
       { name: "indexer_divergence", available: false, reason },

@@ -33,7 +33,7 @@ Compromise model: the AI agent, MCP server, and host computer can all be attacke
 user-intent ──► agent ──► MCP server ──► WalletConnect / USB-HID ──► Ledger Live / host ──► Ledger device
 ```
 
-Defense in depth: server-side prepare↔send fingerprint, independent 4byte.directory selector check, agent-side ABI decode + pre-sign hash recompute, on-device clear-sign or blind-sign-hash match, WalletConnect session-topic cross-check, `previewToken`/`userDecision` gate, and `get_verification_artifact` for second-LLM cross-verification on high-value flows. **See [SECURITY.md](./SECURITY.md)** for the full threat model, defenses table, residual risks, and verification recipes.
+Defense in depth: server-side prepare↔send fingerprint, independent 4byte.directory selector check, agent-side ABI decode + pre-sign hash recompute, on-device clear-sign or blind-sign-hash match, WalletConnect session-topic cross-check, `previewToken`/`userDecision` gate, and `get_verification_artifact` for second-LLM cross-verification on high-value flows. **See [SECURITY.md](./docs/SECURITY.md)** for the full threat model, defenses table, residual risks, and verification recipes.
 
 ### Agent-side hardening (strongly recommended)
 
@@ -69,7 +69,7 @@ Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verifie
 
 ## Roadmap
 
-[ROADMAP.md](./ROADMAP.md).
+[ROADMAP.md](./docs/ROADMAP.md).
 
 ## Tools
 
@@ -96,7 +96,7 @@ Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verifie
 - `check_contract_security`, `check_permission_risks`, `get_protocol_risk_score`
 - `get_transaction_status` — poll inclusion by hash
 - `get_tx_verification` — re-emit VERIFY-BEFORE-SIGNING + tx JSON for a handle when the original prepare_* output dropped out of context (15-min TTL)
-- `get_verification_artifact` — sparse JSON for second-LLM cross-verification ([details](./SECURITY.md#second-agent-verification-optional-for-the-coordinated-agent-case))
+- `get_verification_artifact` — sparse JSON for second-LLM cross-verification ([details](./docs/SECURITY.md#second-agent-verification-optional-for-the-coordinated-agent-case))
 
 **Execution (Ledger-signed):**
 
@@ -128,7 +128,7 @@ Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verifie
 
 ## Install
 
-Three paths — full instructions, MCP-client wiring, Gatekeeper / SmartScreen handling, update / uninstall in **[INSTALL.md](./INSTALL.md)**.
+Three paths — full instructions, MCP-client wiring, Gatekeeper / SmartScreen handling, update / uninstall in **[INSTALL.md](./docs/INSTALL.md)**.
 
 | Path | TL;DR |
 |---|---|
@@ -165,7 +165,7 @@ For Solana RPC throttling under multi-tool fan-out, inject a [Helius](https://he
 
 ## Use with Claude Desktop / Claude Code / Cursor
 
-`vaultpilot-mcp setup` detects installed clients and registers vaultpilot-mcp with each (existing configs backed up to `<file>.vaultpilot.bak`). Per-project / per-workspace configs are skipped — the wizard runs from arbitrary CWD. For manual wiring or the per-client config paths, see [INSTALL.md §5](./INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run).
+`vaultpilot-mcp setup` detects installed clients and registers vaultpilot-mcp with each (existing configs backed up to `<file>.vaultpilot.bak`). Per-project / per-workspace configs are skipped — the wizard runs from arbitrary CWD. For manual wiring or the per-client config paths, see [INSTALL.md §5](./docs/INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run).
 
 ## Environment variables
 
@@ -192,7 +192,7 @@ npm run test:watch
 
 ## Contributing
 
-PRs welcome. The CLA Assistant bot will ask you to sign the [Contributor License Agreement](./CLA.md) on your first PR — one signature covers all future PRs. The CLA grants the project the right to relicense your contribution; without it, the BUSL-1.1 → Apache 2.0 auto-conversion in 2030 would get stuck. Repo owner and Dependabot are exempt.
+PRs welcome. The CLA Assistant bot will ask you to sign the [Contributor License Agreement](./docs/CLA.md) on your first PR — one signature covers all future PRs. The CLA grants the project the right to relicense your contribution; without it, the BUSL-1.1 → Apache 2.0 auto-conversion in 2030 would get stuck. Repo owner and Dependabot are exempt.
 
 ## License
 

@@ -5,7 +5,7 @@ Real contributions from real people are very welcome. This document exists to fi
 ## Before opening a PR
 
 - **Sign the [CLA](./CLA.md).** The CLA Assistant bot prompts you on your first PR — one signature covers all future contributions.
-- **Read [CLAUDE.md](./CLAUDE.md).** It documents the worktree-per-feature rule, the PR-based workflow, the chat-output conventions, and the security posture this repo cares about.
+- **Read [CLAUDE.md](../CLAUDE.md).** It documents the worktree-per-feature rule, the PR-based workflow, the chat-output conventions, and the security posture this repo cares about.
 - **Run the tests.** `npm install && npm run build && npx vitest run`. PRs that don't keep the suite green won't be reviewed.
 - **Use a worktree, not the main checkout.** `.claude/worktrees/<short-name>` per feature. Multiple agents share this repo and race on the index otherwise.
 

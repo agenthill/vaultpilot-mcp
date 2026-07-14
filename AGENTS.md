@@ -59,7 +59,7 @@ If this errors with "command not found" — `claude mcp add` is a Claude **Code*
 
 #### Claude Desktop
 
-Paste into `claude_desktop_config.json` (path in [INSTALL.md §5](./INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run)). Pick the OS variant:
+Paste into `claude_desktop_config.json` (path in [INSTALL.md §5](./docs/INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run)). Pick the OS variant:
 
 ```jsonc
 // macOS / Linux
@@ -84,7 +84,7 @@ Paste into `~/.cursor/mcp.json` (Windows: use the `cmd /c` variant from the Clau
 
 #### Continue / other
 
-See [INSTALL.md §5](./INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run) for canonical config paths and per-client schemas.
+See [INSTALL.md §5](./docs/INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run) for canonical config paths and per-client schemas.
 
 **Step 3 (optional) — setup wizard.** Suggest when the user wants higher rate limits (Helius / Infura / Alchemy / TronGrid / Etherscan keys are prompted, none mandatory), is going to sign transactions (offers to clone [`vaultpilot-security-skill`](https://github.com/szhygulin/vaultpilot-security-skill) and [`vaultpilot-setup-skill`](https://github.com/szhygulin/vaultpilot-setup-skill)), or has hit 429 throttling.
 
@@ -138,7 +138,7 @@ Step 3 of the installer (the wizard) registers vaultpilot-mcp with every detecte
 
 If `clients_registered` is non-empty, registration is **done**. Do NOT then run `claude mcp add`, edit `settings.json`, or create a project `.mcp.json` — those are different config surfaces and stacking them creates the broken-setup-with-zero-working-registration mode caught above. Relay `clients_registered` verbatim and tell the user to restart the named clients.
 
-If the user's actual client is in `clients_not_detected` AND missing from `clients_registered`, that's the case for manually adding the config. Use [INSTALL.md](./INSTALL.md) for the exact path; don't improvise.
+If the user's actual client is in `clients_not_detected` AND missing from `clients_registered`, that's the case for manually adding the config. Use [INSTALL.md](./docs/INSTALL.md) for the exact path; don't improvise.
 
 ## Restart is the gating step
 
@@ -196,11 +196,11 @@ Leaving auto-demo:
 3. `send_transaction(handle, previewToken, userDecision)` after user confirms.
 4. `get_transaction_status(txHash, chain)` to monitor.
 
-Read [SECURITY.md](./SECURITY.md) for the defense-in-depth model.
+Read [SECURITY.md](./docs/SECURITY.md) for the defense-in-depth model.
 
 ## Key resources
 
 - [README.md](./README.md) — features, protocols, full tool list
-- [INSTALL.md](./INSTALL.md) — install paths A (binary), B (npm), C (source)
-- [SECURITY.md](./SECURITY.md) — threat model + per-layer defenses
+- [INSTALL.md](./docs/INSTALL.md) — install paths A (binary), B (npm), C (source)
+- [SECURITY.md](./docs/SECURITY.md) — threat model + per-layer defenses
 - [GitHub repo](https://github.com/szhygulin/vaultpilot-mcp)

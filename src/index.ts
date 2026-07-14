@@ -4259,7 +4259,7 @@ async function main() {
         "if the lazy check hasn't resolved yet), `updateAvailable` (strict-newer comparator), " +
         "`installPath` (detected kind), `command` (the one-liner to run), `restartHint` " +
         "(post-upgrade restart note), and an optional `note` field that flags caveats " +
-        "(unknown install path → defer to INSTALL.md; unresolved version check → can re-run). " +
+        "(unknown install path → defer to docs/INSTALL.md; unresolved version check → can re-run). " +
         "AGENT BEHAVIOR: call this when the user asks to upgrade, when the `VAULTPILOT NOTICE — " +
         "Update available` block appears and the user wants to act on it, or when the user asks " +
         "'how do I update vaultpilot-mcp'. Surface `command` to the user verbatim — do not " +

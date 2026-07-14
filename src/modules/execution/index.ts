@@ -881,9 +881,9 @@ interface RpcUnavailable {
 }
 
 const RPC_HINT_BTC =
-  "Configure `BITCOIN_RPC_URL` (and optionally `BITCOIN_RPC_COOKIE` for self-hosted bitcoind, or `BITCOIN_RPC_USER`+`BITCOIN_RPC_PASSWORD`, or `BITCOIN_RPC_AUTH_HEADER_NAME`+`BITCOIN_RPC_AUTH_HEADER_VALUE` for hosted providers). See INSTALL.md.";
+  "Configure `BITCOIN_RPC_URL` (and optionally `BITCOIN_RPC_COOKIE` for self-hosted bitcoind, or `BITCOIN_RPC_USER`+`BITCOIN_RPC_PASSWORD`, or `BITCOIN_RPC_AUTH_HEADER_NAME`+`BITCOIN_RPC_AUTH_HEADER_VALUE` for hosted providers). See docs/INSTALL.md.";
 const RPC_HINT_LTC =
-  "Configure `LITECOIN_RPC_URL` (and optionally `LITECOIN_RPC_COOKIE` for self-hosted litecoind, or `LITECOIN_RPC_USER`+`LITECOIN_RPC_PASSWORD`, or `LITECOIN_RPC_AUTH_HEADER_NAME`+`LITECOIN_RPC_AUTH_HEADER_VALUE` for hosted providers). See INSTALL.md.";
+  "Configure `LITECOIN_RPC_URL` (and optionally `LITECOIN_RPC_COOKIE` for self-hosted litecoind, or `LITECOIN_RPC_USER`+`LITECOIN_RPC_PASSWORD`, or `LITECOIN_RPC_AUTH_HEADER_NAME`+`LITECOIN_RPC_AUTH_HEADER_VALUE` for hosted providers). See docs/INSTALL.md.";
 
 async function callBitcoinRpc<T>(
   fn: (cfg: import("../../data/jsonrpc.js").JsonRpcClientConfig) => Promise<T>,
