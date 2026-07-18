@@ -7,6 +7,7 @@
  * regression guard.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { getToolScope } from "../src/config/scope.js";
 
 describe("getToolScope — prefix-derived mapping", () => {
   beforeEach(() => vi.resetModules());
@@ -225,4 +226,69 @@ describe("isToolEnabled — env-var integration", () => {
     const { getEnabledProtocols } = await import("../src/config/scope.js");
     expect(getEnabledProtocols()).toBeNull();
   });
+});
+
+/**
+ * #712 — fund-safety regression guard (ARCHITECTURE.md §6 PRIMARY exit
+ * criterion). `send_transaction` is CORE (untagged, always-on — see
+ * `getToolScope`'s trailing `return {}`), so it never drives this check;
+ * the real risk is a family's `preview_*` guard getting de-coupled from
+ * that same family's `prepare_*` tools.
+ *
+ * Two layers, because either alone misses a real regression:
+ *  1. Structural — the guard tool's scope tag must stay exactly
+ *     `{ family }` (no protocol, no accidental fall-through to core).
+ *     Deleting the guard tool from its family's rule list makes it match
+ *     no rule and fall to the trailing `return {}` (core, always-on) —
+ *     which the behavioral check below CANNOT see (see-through failure
+ *     mode below) but this structural check catches directly.
+ *  2. Behavioral — across every family-scope config, if any of that
+ *     family's representative `prepare_*` tools is enabled, the guard
+ *     tool must be enabled too.
+ */
+describe("co-scoping guard — preview tool tracks its family's prepare tools (#712)", () => {
+  beforeEach(() => vi.resetModules());
+  afterEach(() => vi.unstubAllEnvs());
+
+  const FAMILY_GUARD_TOOL = {
+    evm: "preview_send",
+    solana: "preview_solana_send",
+  } as const;
+
+  // Representative prepare_* tools per family — a mix of family-only and
+  // per-protocol entries so both getToolScope() branches are exercised.
+  const FAMILY_PREPARE_TOOLS: Record<keyof typeof FAMILY_GUARD_TOOL, string[]> = {
+    evm: ["prepare_native_send", "prepare_token_send", "prepare_aave_supply"],
+    solana: ["prepare_solana_native_send", "prepare_marginfi_supply"],
+  };
+
+  it.each(Object.entries(FAMILY_GUARD_TOOL))(
+    "%s's guard tool (%s) scope tag stays exactly {family} — no protocol, no core fall-through",
+    (family, guardTool) => {
+      expect(getToolScope(guardTool)).toEqual({ family });
+    },
+  );
+
+  const SCOPE_CONFIGS = [
+    { chain: "", label: "default (all families)" },
+    { chain: "evm", label: "evm only" },
+    { chain: "solana", label: "solana only" },
+    { chain: "tron", label: "neither evm nor solana enabled" },
+  ];
+
+  for (const [family, guardTool] of Object.entries(FAMILY_GUARD_TOOL)) {
+    it.each(SCOPE_CONFIGS)(
+      `${family}: guard tool "${guardTool}" is enabled whenever any of its family's prepare tools is, under $label`,
+      async ({ chain }) => {
+        vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", chain);
+        const { isToolEnabled } = await import("../src/config/scope.js");
+        const prepareTools = FAMILY_PREPARE_TOOLS[family as keyof typeof FAMILY_GUARD_TOOL];
+        const anyPrepareEnabled = prepareTools.some((t) => isToolEnabled(t));
+        const guardEnabled = isToolEnabled(guardTool);
+        if (anyPrepareEnabled) {
+          expect(guardEnabled).toBe(true);
+        }
+      },
+    );
+  }
 });
