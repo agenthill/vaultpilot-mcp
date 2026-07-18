@@ -149,6 +149,36 @@ describe("pollOnce — failure modes (per-feed isolation)", () => {
   });
 });
 
+describe("startOraclePoller — in-flight re-entrancy guard", () => {
+  it("skips starting a new pollOnce while the previous tick hasn't settled (issue #697)", async () => {
+    vi.useFakeTimers();
+    try {
+      // getAccountInfo never resolves — simulates a hung Solana RPC call,
+      // so the first pollOnce() tick never settles.
+      accountInfoMock.mockImplementation(() => new Promise(() => {}));
+      const { startOraclePoller, stopOraclePoller } = await import(
+        "../src/modules/incidents/oracle-poller.js"
+      );
+      const { KNOWN_PYTH_FEEDS } = await import("../src/modules/incidents/solana-known.js");
+
+      startOraclePoller();
+      // Cold-start poll fires immediately — one call per feed.
+      expect(accountInfoMock).toHaveBeenCalledTimes(KNOWN_PYTH_FEEDS.length);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // The in-flight guard should have skipped both subsequent ticks
+      // since the cold-start pollOnce() never settled.
+      expect(accountInfoMock).toHaveBeenCalledTimes(KNOWN_PYTH_FEEDS.length);
+
+      stopOraclePoller();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("startOraclePoller — idempotency", () => {
   it("starting twice schedules only one timer (no double-poller)", async () => {
     const { startOraclePoller, stopOraclePoller } = await import(
