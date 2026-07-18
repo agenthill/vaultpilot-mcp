@@ -17,9 +17,21 @@ const RPC_INCOMPLETE_NOTE =
  *
  * viem wraps the underlying failure and nests the transport error in `cause`, so
  * we walk the whole cause chain and positively identify transport shapes by
- * class name / HTTP status. Anything NOT positively identified as transport is
- * treated as a revert — preserving the pre-existing negative-result behaviour
- * for genuine non-Ownable / non-Safe / non-timelock contracts.
+ * class name, HTTP status, AND JSON-RPC error code. Anything NOT positively
+ * identified as transport is treated as a revert — preserving the pre-existing
+ * negative-result behaviour for genuine non-Ownable / non-Safe / non-timelock
+ * contracts.
+ *
+ * Two distinct transport-degradation classes survive viem's retry budget:
+ *   - HTTP-status shapes: `HttpRequestError` / `TimeoutError` / socket errors,
+ *     or a 429/5xx `.status`.
+ *   - JSON-RPC-code shapes that carry NO HTTP `.status`, only a numeric `.code`
+ *     on the nested `RpcRequestError`: `LimitExceededRpcError` (-32005),
+ *     `InternalRpcError` (-32603), and a body-level `{code:429}`. Empirically
+ *     (viem 2.54.x) these wrap up through `ContractFunctionExecutionError`, so
+ *     the code must be matched anywhere in the cause chain — a top-level class
+ *     check alone misses them and re-opens the #696 false negative for the
+ *     rate-limit / internal-error class.
  */
 function isTransportError(err: unknown): boolean {
   const TRANSPORT_NAMES = new Set([
@@ -27,15 +39,24 @@ function isTransportError(err: unknown): boolean {
     "TimeoutError",
     "SocketClosedError",
     "WebSocketRequestError",
+    "LimitExceededRpcError",
+    "InternalRpcError",
   ]);
+  // JSON-RPC codes for provider degradation that survives the retry budget.
+  const TRANSPORT_RPC_CODES = new Set([-32005, -32603, 429]);
   const seen = new Set<unknown>();
   let node: unknown = err;
   while (node && typeof node === "object" && !seen.has(node)) {
     seen.add(node);
-    const n = node as { name?: unknown; status?: unknown; cause?: unknown };
+    const n = node as { name?: unknown; status?: unknown; code?: unknown; body?: unknown; cause?: unknown };
     if (typeof n.name === "string" && TRANSPORT_NAMES.has(n.name)) return true;
     // A 429/5xx that survived the retry budget is transport, not revert.
     if (typeof n.status === "number" && (n.status === 429 || n.status >= 500)) return true;
+    // A JSON-RPC degradation code (no HTTP status) surfaced by the nested
+    // RpcRequestError — matched anywhere in the chain.
+    if (typeof n.code === "number" && TRANSPORT_RPC_CODES.has(n.code)) return true;
+    // Body-level {code:429} some providers return without an HTTP status.
+    if (n.body && typeof n.body === "object" && (n.body as { code?: unknown }).code === 429) return true;
     node = n.cause;
   }
   return false;
