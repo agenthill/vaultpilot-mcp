@@ -25,7 +25,54 @@
  *
  * Stable, side-effect-free, no IO. Always returns a non-empty string.
  */
+/**
+ * Provider API keys are configured into the RPC URL PATH (Infura
+ * `/v3/<key>`, Alchemy `/v2/<key>`) or as an `api-key`/`apikey` query
+ * param (`src/config/chains.ts`). A viem `HttpRequestError` from a
+ * transport failure carries that full URL in both its `.message` (a
+ * "URL: …" line) and a `.url` own-prop — confirmed empirically against
+ * the installed viem@2.54.x — so an untouched serialization leaks the
+ * key into the MCP tool-error response.
+ *
+ * This is the choke-point redactor (issue #695): every string
+ * `safeErrorMessage` is about to return passes through it, so the leak
+ * is closed once for every provider and every error shape rather than
+ * per-provider. It is a pure string transform — it does not know or
+ * care which provider produced the URL.
+ *
+ * Redacts:
+ *   - `/v3/<seg>` and `/v2/<seg>` path segments (the Infura/Alchemy key
+ *     slot) — `<seg>` must be ≥ 8 chars to avoid clobbering short,
+ *     non-secret path words like `/v2/eth`.
+ *   - `api-key=` / `apikey=` query-param values.
+ *
+ * The `***` placeholder is left in place so the reader still sees that
+ * a redaction happened.
+ */
+// Provider-shape-specific, NOT a general secret scrubber: these patterns match
+// the exact URL shapes VaultPilot configures keys into (Infura/Alchemy path
+// segment, `api-key` query param). A token embedded any other way is not
+// covered — widen deliberately if a new provider adds a new shape.
+const API_KEY_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Infura `/v3/<key>` and Alchemy `/v2/<key>` path segments.
+  [/(\/v[23]\/)[A-Za-z0-9_-]{8,}/g, "$1***"],
+  // `api-key=<key>` / `apikey=<key>` query params (any host).
+  [/([?&](?:api-?key)=)[^&#\s"')\]]+/gi, "$1***"],
+];
+
+export function redactSecrets(str: string): string {
+  let out = str;
+  for (const [pattern, replacement] of API_KEY_PATTERNS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
 export function safeErrorMessage(error: unknown): string {
+  return redactSecrets(safeErrorMessageRaw(error));
+}
+
+function safeErrorMessageRaw(error: unknown): string {
   if (typeof error === "string") {
     return error.length > 0 ? error : "Unknown error (empty string thrown)";
   }

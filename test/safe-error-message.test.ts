@@ -82,3 +82,60 @@ describe("safeErrorMessage — issue #326 stringification fix", () => {
     expect(out).toContain("1234567890123");
   });
 });
+
+describe("safeErrorMessage — issue #695 provider-API-key redaction", () => {
+  const SECRET = "abc123SECRETKEY";
+
+  it("Infura URL in .message AND .url is redacted — no key, no /v3/<key> segment", () => {
+    // viem HttpRequestError shape (confirmed empirically vs installed
+    // viem@2.54.x): the RPC URL with the key lands in BOTH the `.message`
+    // (as a "URL: …" line) and a `.url` own-prop. Both must be scrubbed
+    // before this string reaches an MCP tool-error response.
+    const url = `https://mainnet.infura.io/v3/${SECRET}`;
+    const err = new Error(`HTTP request failed. URL: ${url}`);
+    Object.defineProperty(err, "url", { value: url, enumerable: true });
+
+    const out = safeErrorMessage(err);
+    expect(out).not.toContain(SECRET);
+    expect(out).not.toContain(`/v3/${SECRET}`);
+  });
+
+  it("Alchemy /v2/<key> path segment is redacted", () => {
+    const url = `https://eth-mainnet.g.alchemy.com/v2/${SECRET}`;
+    const err = new Error(`fetch failed for ${url}`);
+    const out = safeErrorMessage(err);
+    expect(out).not.toContain(SECRET);
+    expect(out).not.toContain(`/v2/${SECRET}`);
+  });
+
+  it("key surfaced only via a .url own-prop (empty .message fallback path) is redacted", () => {
+    const url = `https://mainnet.infura.io/v3/${SECRET}`;
+    const err = new Error("");
+    err.name = "HttpRequestError";
+    Object.defineProperty(err, "url", { value: url, enumerable: true });
+    const out = safeErrorMessage(err);
+    expect(out).not.toContain(SECRET);
+  });
+
+  it("api-key / apikey query params are redacted", () => {
+    const withHyphen = `Timeout: https://rpc.example.com/eth?api-key=${SECRET}`;
+    const withoutHyphen = `Timeout: https://rpc.example.com/eth?apikey=${SECRET}&chain=1`;
+    expect(safeErrorMessage(new Error(withHyphen))).not.toContain(SECRET);
+    expect(safeErrorMessage(new Error(withoutHyphen))).not.toContain(SECRET);
+  });
+
+  it("does not over-redact non-secret error text", () => {
+    // No key-shaped material here — the message must survive verbatim.
+    const out = safeErrorMessage(new Error("Insufficient funds for gas * price + value"));
+    expect(out).toBe("Insufficient funds for gas * price + value");
+  });
+
+  it("does not clobber a legitimate short /v2/ or /v3/ version path (guards against redacting real output)", () => {
+    // `/v2/eth` / `/v3/quote` are real, non-secret API version-path words —
+    // the `{8,}` length floor on the path-segment regex exists precisely so
+    // these survive. If the floor is ever dropped, this string goes RED.
+    const msg =
+      "Upstream 502 from route /v2/eth and quote endpoint /v3/quote — retry later";
+    expect(safeErrorMessage(new Error(msg))).toBe(msg);
+  });
+});

@@ -1250,7 +1250,10 @@ async function broadcastSimulationDispatch(
   } catch (err) {
     simulationResult = {
       simulationFailed: true,
-      reason: err instanceof Error ? err.message : String(err),
+      // #695: the demo-mode broadcast simulation runs a real eth_call against
+      // the keyed RPC via simulateTransaction, so a transport failure carries
+      // the provider key in `err.message`. Redact via the choke-point.
+      reason: safeErrorMessage(err),
     };
   }
   const envelope = buildSimulationEnvelope({
@@ -1411,7 +1414,12 @@ export function previewSendHandler(
       });
       return { content };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // #695: route through safeErrorMessage so a viem transport error that
+      // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
+      // `/v2/<key>`, Helius `?api-key=<key>`) is redacted before it reaches
+      // the MCP response. These catches re-pin/broadcast against the keyed
+      // RPC, so the raw `error.message` leaked the key here.
+      const message = safeErrorMessage(error);
       return {
         content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
@@ -1428,7 +1436,7 @@ export function previewSendHandler(
  * `previewSendHandler` but Solana-native — the message bytes are pinned
  * here (not nonce + EIP-1559 fees).
  */
-function previewSolanaSendHandler(
+export function previewSolanaSendHandler(
   fn: (args: { handle: string }) => Promise<UnsignedSolanaTx>,
 ) {
   return async (args: { handle: string }) => {
@@ -1445,7 +1453,12 @@ function previewSolanaSendHandler(
       content.push({ type: "text", text: renderSolanaAgentTaskBlock(pinned) });
       return { content };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // #695: route through safeErrorMessage so a viem transport error that
+      // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
+      // `/v2/<key>`, Helius `?api-key=<key>`) is redacted before it reaches
+      // the MCP response. These catches re-pin/broadcast against the keyed
+      // RPC, so the raw `error.message` leaked the key here.
+      const message = safeErrorMessage(error);
       return {
         content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
@@ -1463,7 +1476,7 @@ function previewSolanaSendHandler(
  * of attention after a few hundred tokens, so we put the directive adjacent
  * to the txHash it refers to.
  */
-function sendTransactionHandler(
+export function sendTransactionHandler(
   fn: (args: SendTransactionArgs) => Promise<{
     txHash: `0x${string}` | string;
     chain: SupportedChain | "tron" | "solana" | "bitcoin" | "litecoin";
@@ -1507,7 +1520,12 @@ function sendTransactionHandler(
       });
       return { content };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // #695: route through safeErrorMessage so a viem transport error that
+      // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
+      // `/v2/<key>`, Helius `?api-key=<key>`) is redacted before it reaches
+      // the MCP response. These catches re-pin/broadcast against the keyed
+      // RPC, so the raw `error.message` leaked the key here.
+      const message = safeErrorMessage(error);
       return {
         content: [{ type: "text" as const, text: `Error: ${message}` }],
         isError: true,
