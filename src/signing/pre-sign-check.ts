@@ -1,8 +1,9 @@
 import { decodeFunctionData, toFunctionSelector, type Abi } from "viem";
 import { erc20Abi } from "../abis/erc20.js";
 import { aavePoolAbi } from "../abis/aave-pool.js";
-import { stETHAbi, lidoWithdrawalQueueAbi } from "../abis/lido.js";
+import { stETHAbi, wstETHAbi, lidoWithdrawalQueueAbi } from "../abis/lido.js";
 import { eigenStrategyManagerAbi } from "../abis/eigenlayer-strategy-manager.js";
+import { rocketDepositPoolAbi, rocketTokenRETHAbi } from "../abis/rocketpool.js";
 import { cometAbi } from "../abis/compound-comet.js";
 import { morphoBlueAbi } from "../abis/morpho-blue.js";
 import { uniswapPositionManagerAbi } from "../abis/uniswap-position-manager.js";
@@ -52,7 +53,10 @@ type DestinationKind =
   | "compound-v3-comet"
   | "morpho-blue"
   | "lido-stETH"
+  | "lido-wstETH"
   | "lido-withdrawalQueue"
+  | "rocketpool-depositPool"
+  | "rocketpool-rETH"
   | "eigenlayer-strategyManager"
   | "uniswap-v3-npm"
   | "uniswap-v3-swap-router"
@@ -83,7 +87,10 @@ const AAVE_SELECTORS = computeSelectorsFromAbi(aavePoolAbi);
 const COMET_SELECTORS = computeSelectorsFromAbi(cometAbi);
 const MORPHO_SELECTORS = computeSelectorsFromAbi(morphoBlueAbi);
 const LIDO_STETH_SELECTORS = computeSelectorsFromAbi(stETHAbi);
+const LIDO_WSTETH_SELECTORS = computeSelectorsFromAbi(wstETHAbi);
 const LIDO_QUEUE_SELECTORS = computeSelectorsFromAbi(lidoWithdrawalQueueAbi);
+const ROCKET_DEPOSIT_POOL_SELECTORS = computeSelectorsFromAbi(rocketDepositPoolAbi);
+const ROCKET_RETH_SELECTORS = computeSelectorsFromAbi(rocketTokenRETHAbi);
 const EIGEN_SELECTORS = computeSelectorsFromAbi(eigenStrategyManagerAbi);
 const UNISWAP_NPM_SELECTORS = computeSelectorsFromAbi(uniswapPositionManagerAbi);
 const UNISWAP_SWAP_ROUTER_SELECTORS = computeSelectorsFromAbi(swapRouter02Abi);
@@ -123,8 +130,20 @@ async function classifyDestination(
     if (lo === CONTRACTS.ethereum.lido.stETH.toLowerCase()) {
       return { kind: "lido-stETH", allowedAbi: stETHAbi };
     }
+    // wstETH — target of prepare_lido_wrap (wrap) / prepare_lido_unwrap (unwrap).
+    if (lo === CONTRACTS.ethereum.lido.wstETH.toLowerCase()) {
+      return { kind: "lido-wstETH", allowedAbi: wstETHAbi };
+    }
     if (lo === CONTRACTS.ethereum.lido.withdrawalQueue.toLowerCase()) {
       return { kind: "lido-withdrawalQueue", allowedAbi: lidoWithdrawalQueueAbi };
+    }
+    // Rocket Pool — RocketDepositPool.deposit() (prepare_rocketpool_stake) and
+    // rETH.burn() (prepare_rocketpool_unstake). Fixed mainnet addresses.
+    if (lo === CONTRACTS.ethereum.rocketpool.depositPool.toLowerCase()) {
+      return { kind: "rocketpool-depositPool", allowedAbi: rocketDepositPoolAbi };
+    }
+    if (lo === CONTRACTS.ethereum.rocketpool.rETH.toLowerCase()) {
+      return { kind: "rocketpool-rETH", allowedAbi: rocketTokenRETHAbi };
     }
     if (lo === CONTRACTS.ethereum.eigenlayer.strategyManager.toLowerCase()) {
       return { kind: "eigenlayer-strategyManager", allowedAbi: eigenStrategyManagerAbi };
@@ -178,6 +197,8 @@ function buildSpenderAllowlist(chain: SupportedChain): Set<string> {
   if (chain === "ethereum") {
     out.add(CONTRACTS.ethereum.morpho.blue.toLowerCase());
     out.add(CONTRACTS.ethereum.lido.withdrawalQueue.toLowerCase());
+    // wstETH is the spender on prepare_lido_wrap's approve leg (stETH → wstETH).
+    out.add(CONTRACTS.ethereum.lido.wstETH.toLowerCase());
     out.add(CONTRACTS.ethereum.eigenlayer.strategyManager.toLowerCase());
   }
   out.add(CONTRACTS[chain].uniswap.positionManager.toLowerCase());
@@ -349,8 +370,16 @@ export async function assertTransactionSafe(tx: UnsignedTx): Promise<void> {
       case "lido-stETH":
         // stETH is both the Lido submit surface AND an ERC-20 (transfer/approve).
         return new Set<string>([...LIDO_STETH_SELECTORS, ...ERC20_SELECTORS]);
+      case "lido-wstETH":
+        // wstETH is both the wrap/unwrap surface AND an ERC-20 (transfer/approve).
+        return new Set<string>([...LIDO_WSTETH_SELECTORS, ...ERC20_SELECTORS]);
       case "lido-withdrawalQueue":
         return LIDO_QUEUE_SELECTORS;
+      case "rocketpool-depositPool":
+        return ROCKET_DEPOSIT_POOL_SELECTORS;
+      case "rocketpool-rETH":
+        // rETH is both the burn surface AND an ERC-20 (transfer/approve).
+        return new Set<string>([...ROCKET_RETH_SELECTORS, ...ERC20_SELECTORS]);
       case "eigenlayer-strategyManager":
         return EIGEN_SELECTORS;
       case "uniswap-v3-npm":

@@ -172,6 +172,15 @@ export async function buildCurveAddLiquidity(
       spenderLabel: `Curve stable_ng plain pool ${pool}`,
     });
     if (a !== null) {
+      // The pool is not in the global approve-allowlist (Aave / Compound /
+      // Morpho / Lido Queue / EigenLayer / Uniswap NPM+Router / LiFi), so
+      // stamp the affirmative-ack on every leg of this approval sub-chain
+      // (a plain approve, or a reset→approve for USDT-style coins) to skip
+      // `assertTransactionSafe`'s block-2 spender-allowlist refusal. Mirrors
+      // `buildCurveSwap`'s approval stamp (#618/#626). Issue #734.
+      for (let leg: UnsignedTx | undefined = a; leg; leg = leg.next) {
+        leg.acknowledgedNonAllowlistedSpender = true;
+      }
       chainedApproval = chainedApproval === null ? a : chainApproval(chainedApproval, a);
     }
   }
@@ -192,6 +201,13 @@ export async function buildCurveAddLiquidity(
         ...(p.slippageBps !== undefined ? { slippageBps: String(p.slippageBps) } : {}),
       },
     },
+    // Curve pool addresses are dynamic (stable_ng factory) so they can never
+    // appear in `classifyDestination`'s recognized set — without an ack,
+    // `assertTransactionSafe`'s block-4 catch-all refuses the add_liquidity
+    // leg at preview/send. Mirror `buildCurveSwap` (#626): the destination-
+    // trust source is server-side pool validation (is_meta=false + N_COINS
+    // read against the stable_ng factory above). Issue #734.
+    acknowledgedNonProtocolTarget: true,
   };
 
   return chainedApproval === null ? addTx : chainApproval(chainedApproval, addTx);
