@@ -49,6 +49,10 @@
  * The `***` placeholder is left in place so the reader still sees that
  * a redaction happened.
  */
+// Provider-shape-specific, NOT a general secret scrubber: these patterns match
+// the exact URL shapes VaultPilot configures keys into (Infura/Alchemy path
+// segment, `api-key` query param). A token embedded any other way is not
+// covered — widen deliberately if a new provider adds a new shape.
 const API_KEY_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // Infura `/v3/<key>` and Alchemy `/v2/<key>` path segments.
   [/(\/v[23]\/)[A-Za-z0-9_-]{8,}/g, "$1***"],
