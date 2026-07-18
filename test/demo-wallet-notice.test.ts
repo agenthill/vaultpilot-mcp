@@ -15,6 +15,14 @@ const ENV_KEY = "VAULTPILOT_DEMO";
 describe("demo-mode onboarding notice", () => {
   let savedEnv: string | undefined;
 
+  // Deliberately narrow: only the two `src/demo/*` modules here. They
+  // don't transitively pull `src/index.js` (the full server graph —
+  // every prepare_* tool, every chain SDK), so this hook stays fast
+  // regardless of local machine load. `_resetMissingDemoWalletDedup`
+  // lives in `src/index.js`; each `it()` below already imports that
+  // module for `missingDemoWalletNotice` and resets the dedup flag
+  // there instead — under `testTimeout` (15s, vitest.config.ts), not
+  // this hook's stricter default `hookTimeout` (10s). See issue #691.
   beforeEach(async () => {
     savedEnv = process.env[ENV_KEY];
     const { _resetAutoDemoLatchForTests } = await import("../src/demo/index.js");
@@ -23,8 +31,6 @@ describe("demo-mode onboarding notice", () => {
     );
     _resetAutoDemoLatchForTests();
     _resetLiveWalletForTests();
-    const { _resetMissingDemoWalletDedup } = await import("../src/index.js");
-    _resetMissingDemoWalletDedup();
   });
 
   afterEach(async () => {
@@ -42,7 +48,9 @@ describe("demo-mode onboarding notice", () => {
     delete process.env[ENV_KEY];
     const { _setAutoDemoLatchForTests } = await import("../src/demo/index.js");
     _setAutoDemoLatchForTests(true);
-    const { missingDemoWalletNotice } = await import("../src/index.js");
+    const { missingDemoWalletNotice, _resetMissingDemoWalletDedup } =
+      await import("../src/index.js");
+    _resetMissingDemoWalletDedup();
     const notice = missingDemoWalletNotice();
     expect(notice).not.toBeNull();
     expect(notice).toMatch(/^VAULTPILOT NOTICE — /);
@@ -62,7 +70,9 @@ describe("demo-mode onboarding notice", () => {
 
   it("fires under explicit-env reason with copy that names VAULTPILOT_DEMO as the leave route", async () => {
     process.env[ENV_KEY] = "true";
-    const { missingDemoWalletNotice } = await import("../src/index.js");
+    const { missingDemoWalletNotice, _resetMissingDemoWalletDedup } =
+      await import("../src/index.js");
+    _resetMissingDemoWalletDedup();
     const notice = missingDemoWalletNotice();
     expect(notice).not.toBeNull();
     expect(notice).toMatch(/^VAULTPILOT NOTICE — /);
@@ -75,7 +85,9 @@ describe("demo-mode onboarding notice", () => {
     delete process.env[ENV_KEY];
     const { _setAutoDemoLatchForTests } = await import("../src/demo/index.js");
     _setAutoDemoLatchForTests(false);
-    const { missingDemoWalletNotice } = await import("../src/index.js");
+    const { missingDemoWalletNotice, _resetMissingDemoWalletDedup } =
+      await import("../src/index.js");
+    _resetMissingDemoWalletDedup();
     expect(missingDemoWalletNotice()).toBeNull();
   });
 
@@ -83,13 +95,17 @@ describe("demo-mode onboarding notice", () => {
     process.env[ENV_KEY] = "true";
     const { setLivePersona } = await import("../src/demo/index.js");
     setLivePersona("defi-degen");
-    const { missingDemoWalletNotice } = await import("../src/index.js");
+    const { missingDemoWalletNotice, _resetMissingDemoWalletDedup } =
+      await import("../src/index.js");
+    _resetMissingDemoWalletDedup();
     expect(missingDemoWalletNotice()).toBeNull();
   });
 
   it("dedupes to once-per-session: first call returns the block, subsequent calls return null", async () => {
     process.env[ENV_KEY] = "true";
-    const { missingDemoWalletNotice } = await import("../src/index.js");
+    const { missingDemoWalletNotice, _resetMissingDemoWalletDedup } =
+      await import("../src/index.js");
+    _resetMissingDemoWalletDedup();
     const first = missingDemoWalletNotice();
     const second = missingDemoWalletNotice();
     const third = missingDemoWalletNotice();
