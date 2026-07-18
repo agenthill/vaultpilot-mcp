@@ -58,6 +58,23 @@ const LITECOIN_NETWORK = {
 export type { PairedLitecoinEntry };
 
 /**
+ * Issue #240: the Ledger Litecoin app at v2.4.11 still exposes the LEGACY
+ * signing API (`createPaymentTransaction`); the modern `signPsbtBuffer` path
+ * the BTC app uses isn't implemented, and `@ledgerhq/hw-app-btc` raises this
+ * exact string when it detects the legacy surface.
+ *
+ * Issue #698: `package.json` pins the SDK with a caret (`^10.21.1`), so a
+ * patch release can reword this string without a `package.json` diff —
+ * the caret has already drifted once (lockfile resolves past the original
+ * patch with no manifest edit). This constant is the SINGLE source both the
+ * fallback check below and `test/ltc-message-prefix-and-legacy-app.test.ts`'s
+ * real-SDK drift guard read from, so a future SDK bump that changes the text
+ * fails that test loudly instead of the fallback silently no longer firing.
+ */
+export const LTC_LEGACY_APP_ERROR_MARKER =
+  "signPsbtBuffer is not supported with the legacy Bitcoin app";
+
+/**
  * Litecoin BIP-44/49/84/86 paths — one purpose per address format. Per
  * SLIP-44 + the relevant BIPs:
  *
@@ -668,15 +685,8 @@ export async function signLtcPsbtOnLedger(args: {
         }
         return { rawTxHex: result.tx };
       } catch (err) {
-        // Issue #240: the Ledger Litecoin app at v2.4.11 still exposes
-        // the LEGACY signing API (`createPaymentTransaction`); the
-        // modern `signPsbtBuffer` path the BTC app uses isn't
-        // implemented and hw-app-btc raises this exact string when it
-        // detects the legacy surface.
         const msg = err instanceof Error ? err.message : String(err);
-        if (
-          msg.includes("signPsbtBuffer is not supported with the legacy Bitcoin app")
-        ) {
+        if (msg.includes(LTC_LEGACY_APP_ERROR_MARKER)) {
           return { rawTxHex: await signLtcPsbtViaLegacyApi(app, args) };
         }
         throw err;
