@@ -106,6 +106,29 @@ interface StoredTx {
 
 const store = new Map<string, StoredTx>();
 
+/**
+ * Recursively `Object.freeze` `value` and every plain-object/array it
+ * reaches, so a later `entry.tx.foo = x` (or a nested `entry.tx.verification.x
+ * = y`) throws in strict mode instead of silently sticking. Issue #710 —
+ * stored-tx immutability was assumed, not enforced.
+ *
+ * Deliberately targets only the `tx` field's VALUE, never the `StoredTx`
+ * wrapper itself: `attachPinnedGas` / `markAmbiguousAttempt` /
+ * `clearAmbiguousAttempt` mutate `entry.pin` / `entry.ambiguousAttempt` in
+ * place on the wrapper, and freezing the wrapper would break those paths.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return value;
+  }
+  if (Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
+
 function prune(now = Date.now()): void {
   for (const [handle, entry] of store) {
     if (entry.expiresAt < now) store.delete(handle);
@@ -143,10 +166,16 @@ export function issueHandles(tx: UnsignedTx): UnsignedTx {
   // Store a copy without `handle` on the stored value itself (not needed at
   // lookup time) to avoid the tautology of storing the key inside the value.
   const { handle: _h, next: _n, ...stored } = withHandle;
-  store.set(handle, {
-    tx: { ...stored, ...(nextWithHandles ? { next: nextWithHandles } : {}) },
-    expiresAt,
-  });
+  const storedTx: UnsignedTx = {
+    ...stored,
+    ...(nextWithHandles ? { next: nextWithHandles } : {}),
+  };
+  // Deep-freeze the stored copy so a mutation attempt on the object
+  // `consumeHandle` hands back (by reference — see below) cannot alter what
+  // a later `consumeHandle` on the same handle sees. Enforces the
+  // immutability `execution/index.ts`'s send path relies on, rather than
+  // resting on "nothing currently mutates it" (issue #710).
+  store.set(handle, { tx: deepFreeze(storedTx), expiresAt });
   return withHandle;
 }
 
