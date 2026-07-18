@@ -33,6 +33,10 @@ const POLL_INTERVAL_MS = 60_000;
 
 let pollerHandle: NodeJS.Timeout | undefined;
 let pollerStarted = false;
+// In-flight re-entrancy guard (issue #697) — the interval callback below
+// checks this before starting a new pollOnce() so an unresolved tick
+// (e.g. a hung Solana RPC call) can't overlap with the next one.
+let pollInFlight = false;
 
 /**
  * Read every known feed once. Best-effort per feed — one feed's
@@ -114,13 +118,28 @@ export function startOraclePoller(): void {
   pollerStarted = true;
   // Fire-and-forget the cold poll. Don't await — we don't want to
   // block server boot on Solana RPC reachability.
-  void pollOnce().catch(() => {
-    /* swallowed — first-tick failures are normal during cold-RPC */
-  });
-  pollerHandle = setInterval(() => {
-    void pollOnce().catch(() => {
-      /* swallowed — see file docstring */
+  pollInFlight = true;
+  void pollOnce()
+    .catch(() => {
+      /* swallowed — first-tick failures are normal during cold-RPC */
+    })
+    .finally(() => {
+      pollInFlight = false;
     });
+  pollerHandle = setInterval(() => {
+    if (pollInFlight) {
+      // Previous tick hasn't settled (e.g. a hung RPC call) — skip this
+      // tick rather than starting an overlapping pollOnce() round.
+      return;
+    }
+    pollInFlight = true;
+    void pollOnce()
+      .catch(() => {
+        /* swallowed — see file docstring */
+      })
+      .finally(() => {
+        pollInFlight = false;
+      });
   }, POLL_INTERVAL_MS);
   pollerHandle.unref?.();
 }
@@ -132,4 +151,5 @@ export function stopOraclePoller(): void {
     pollerHandle = undefined;
   }
   pollerStarted = false;
+  pollInFlight = false;
 }
