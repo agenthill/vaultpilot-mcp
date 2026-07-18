@@ -154,11 +154,20 @@ export interface ClassifierVerdict {
  *     pulling your own wallet via a pre-existing approval is an
  *     architectural mismatch with the user's intent, not a legitimate
  *     advanced flow.
+ *   - `transferFromRecipientIsWallet` (computed by the caller from the
+ *     decoded `to` arg, `args[1]`) gates the ack override for
+ *     `transferFrom`: the rule's only legitimate ack case is pulling a
+ *     pre-existing allowance TO YOUR OWN WALLET. When the recipient is
+ *     any other address the pulled tokens never land back at the wallet
+ *     — that is pure value-exfil, so the ack is NON-bypassable (issue
+ *     #711). Recipient goes unchecked → deny-by-default (treated as not
+ *     the wallet).
  */
 export function applyCustomCallClassifier(
   data: `0x${string}`,
   ack: boolean | undefined,
   transferFromSelfAsFrom: boolean,
+  transferFromRecipientIsWallet: boolean,
 ): ClassifierVerdict {
   const rule = classifyCustomCallSelector(data);
   if (!rule) return { rule: null };
@@ -172,6 +181,16 @@ export function applyCustomCallClassifier(
           `bypassable through this escape hatch. If you intend to move tokens from ` +
           `your own wallet, use prepare_token_send (no allowance required). If you're ` +
           `revoking an approval, use prepare_revoke_approval.`,
+      );
+    }
+    if (isTransferFrom && !transferFromRecipientIsWallet) {
+      throw new Error(
+        `CUSTOM_CALL_REFUSED [${rule.signature}]: the transferFrom recipient (args[1]) ` +
+          `is not your wallet — pulling an allowance to an arbitrary address is ` +
+          `value-exfil and is NOT bypassable through this escape hatch. The ` +
+          `\`acknowledgeKnownExfilPattern\` override applies only to the legitimate case ` +
+          `it describes: pulling a pre-existing allowance TO YOUR OWN WALLET (to == your ` +
+          `wallet). If you intended to send tokens to someone else, use prepare_token_send.`,
       );
     }
     if (ack !== true) {
