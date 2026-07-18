@@ -235,21 +235,21 @@ describe("isToolEnabled — env-var integration", () => {
  * the real risk is a family's `preview_*` guard getting de-coupled from
  * that same family's `prepare_*` tools.
  *
- * Two layers, because either alone misses a real regression:
- *  1. Structural — the guard tool's scope tag must stay exactly
- *     `{ family }` (no protocol, no accidental fall-through to core).
- *     Deleting the guard tool from its family's rule list makes it match
- *     no rule and fall to the trailing `return {}` (core, always-on) —
- *     which the behavioral check below CANNOT see (see-through failure
- *     mode below) but this structural check catches directly.
- *  2. Behavioral — across every family-scope config, if any of that
- *     family's representative `prepare_*` tools is enabled, the guard
- *     tool must be enabled too.
+ * Asserts the scope TAG directly, not `isToolEnabled`'s boolean. A boolean
+ * check can't go red for this regression: `isToolEnabled` only gates a tool
+ * that carries a family tag, so a guard tool silently demoted to core
+ * (`getToolScope` falls through to the trailing `return {}`) reads as
+ * "always enabled" and the "prepare enabled => guard enabled" implication
+ * stays trivially true no matter what scope config is stubbed.
+ *
+ * Comparing the guard's tag against each representative prepare tool's tag
+ * (rather than hardcoding `{family: "evm"}` in isolation) is what makes this
+ * non-redundant with the pre-existing per-tool table above (lines ~51, 71):
+ * it encodes the co-scoping RELATIONSHIP, so it also catches the guard and
+ * its prepare siblings drifting to two different family tags, not just the
+ * guard falling to `{}`.
  */
-describe("co-scoping guard — preview tool tracks its family's prepare tools (#712)", () => {
-  beforeEach(() => vi.resetModules());
-  afterEach(() => vi.unstubAllEnvs());
-
+describe("co-scoping guard — preview tool's scope tag tracks its family's prepare tools (#712)", () => {
   const FAMILY_GUARD_TOOL = {
     evm: "preview_send",
     solana: "preview_solana_send",
@@ -263,32 +263,20 @@ describe("co-scoping guard — preview tool tracks its family's prepare tools (#
   };
 
   it.each(Object.entries(FAMILY_GUARD_TOOL))(
-    "%s's guard tool (%s) scope tag stays exactly {family} — no protocol, no core fall-through",
+    "%s: guard tool %s carries the same family tag as its family's prepare tools",
     (family, guardTool) => {
-      expect(getToolScope(guardTool)).toEqual({ family });
+      const guardScope = getToolScope(guardTool);
+      const prepareTools = FAMILY_PREPARE_TOOLS[family as keyof typeof FAMILY_GUARD_TOOL];
+      for (const prepareTool of prepareTools) {
+        const prepareScope = getToolScope(prepareTool);
+        // Co-scoping invariant: if the guard tool ever falls through
+        // getToolScope's rule list to the trailing core `return {}`,
+        // guardScope.family becomes `undefined` while prepareScope.family
+        // stays the tagged family — this line goes RED right there.
+        expect(guardScope.family).toBe(prepareScope.family);
+      }
+      // Direct tag pin — no protocol tag, no unexpected core fall-through.
+      expect(guardScope).toEqual({ family });
     },
   );
-
-  const SCOPE_CONFIGS = [
-    { chain: "", label: "default (all families)" },
-    { chain: "evm", label: "evm only" },
-    { chain: "solana", label: "solana only" },
-    { chain: "tron", label: "neither evm nor solana enabled" },
-  ];
-
-  for (const [family, guardTool] of Object.entries(FAMILY_GUARD_TOOL)) {
-    it.each(SCOPE_CONFIGS)(
-      `${family}: guard tool "${guardTool}" is enabled whenever any of its family's prepare tools is, under $label`,
-      async ({ chain }) => {
-        vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", chain);
-        const { isToolEnabled } = await import("../src/config/scope.js");
-        const prepareTools = FAMILY_PREPARE_TOOLS[family as keyof typeof FAMILY_GUARD_TOOL];
-        const anyPrepareEnabled = prepareTools.some((t) => isToolEnabled(t));
-        const guardEnabled = isToolEnabled(guardTool);
-        if (anyPrepareEnabled) {
-          expect(guardEnabled).toBe(true);
-        }
-      },
-    );
-  }
 });
