@@ -88,22 +88,41 @@ describe("Issue #734: dead-on-arrival prepare_* tools pass the real pre-sign gat
     await assertEveryLegSafe(tx);
   });
 
-  it("prepare_curve_add_liquidity — approve(pool) + add_liquidity(pool)", { timeout: 15000 }, async () => {
-    const mockClient = {
-      multicall: vi.fn(async ({ contracts }: { contracts: { functionName: string }[] }) => {
-        const fns = contracts.map((c) => c.functionName);
-        if (fns.includes("is_meta")) {
-          // is_meta + N_COINS + get_coins
-          return [false, 2n, [COIN_USDC, COIN_USDT, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO]];
-        }
-        throw new Error(`unexpected multicall: ${fns.join(",")}`);
-      }),
+  /**
+   * Factory multicall mock keyed by function name (order-independent) so it
+   * exercises the SAME builder against both the pre-fix shape (pool `N_COINS`)
+   * and the post-fix shape (factory `get_n_coins` registration anchor).
+   * `registered=true` → get_n_coins returns 2 (a genuine stable_ng plain
+   * pool); `registered=false` → get_n_coins returns 0 (unregistered/attacker
+   * address the factory never minted).
+   */
+  function curveFactoryClient(registered: boolean) {
+    return {
+      multicall: vi.fn(async ({ contracts }: { contracts: { functionName: string }[] }) =>
+        contracts.map((c) => {
+          switch (c.functionName) {
+            case "is_meta":
+              return false;
+            case "N_COINS": // pool self-report (pre-fix trust source)
+              return 2n;
+            case "get_n_coins": // factory registration (post-fix trust anchor)
+              return registered ? 2n : 0n;
+            case "get_coins":
+              return [COIN_USDC, COIN_USDT, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO];
+            default:
+              throw new Error(`unexpected multicall fn: ${c.functionName}`);
+          }
+        }),
+      ),
       readContract: vi.fn(async (call: { functionName: string }) => {
         if (call.functionName === "allowance") return 0n;
         throw new Error(`unexpected readContract: ${call.functionName}`);
       }),
     };
-    vi.doMock("../src/data/rpc.js", () => ({ getClient: () => mockClient }));
+  }
+
+  it("prepare_curve_add_liquidity — approve(pool) + add_liquidity(pool)", { timeout: 15000 }, async () => {
+    vi.doMock("../src/data/rpc.js", () => ({ getClient: () => curveFactoryClient(true) }));
     vi.doMock("../src/modules/shared/token-meta.js", () => ({
       resolveTokenMeta: async () => ({ symbol: "USDC", decimals: 6 }),
     }));
@@ -114,8 +133,34 @@ describe("Issue #734: dead-on-arrival prepare_* tools pass the real pre-sign gat
       pool: POOL_A,
       amounts: ["1000000", "0"], // deposit only the USDC slot → one approval
       minLpOut: "1",
+      // Mirror curve_swap: the approve leg targets a non-allowlisted Curve
+      // pool, so the user must opt in — the tool no longer auto-acks.
+      acknowledgeNonAllowlistedSpender: true,
     });
     await assertEveryLegSafe(tx);
+  });
+
+  it("prepare_curve_add_liquidity — REJECTS an unregistered/attacker pool at the factory registration check", { timeout: 15000 }, async () => {
+    // The pool self-reports N_COINS=2 (attacker-controllable) but the
+    // stable_ng factory never registered it → get_n_coins == 0. Pre-fix the
+    // builder trusted the pool's self-report and stamped
+    // acknowledgedNonProtocolTarget (RED: no throw). Post-fix it mirrors
+    // curve_swap's `ensureSupportedCurvePool` factory anchor and rejects.
+    vi.doMock("../src/data/rpc.js", () => ({ getClient: () => curveFactoryClient(false) }));
+    vi.doMock("../src/modules/shared/token-meta.js", () => ({
+      resolveTokenMeta: async () => ({ symbol: "USDC", decimals: 6 }),
+    }));
+
+    const { buildCurveAddLiquidity } = await import("../src/modules/curve/actions.js");
+    await expect(
+      buildCurveAddLiquidity({
+        wallet: WALLET,
+        pool: POOL_A,
+        amounts: ["1000000", "0"],
+        minLpOut: "1",
+        acknowledgeNonAllowlistedSpender: true,
+      }),
+    ).rejects.toThrow(/not registered with the Curve stable_ng factory/);
   });
 
   it("does NOT newly recognize any destination beyond the exact fixed contracts", { timeout: 15000 }, async () => {
