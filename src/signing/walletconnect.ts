@@ -141,6 +141,28 @@ export interface PairingError {
 }
 let lastPairingError: PairingError | null = null;
 
+/**
+ * Generation counter guarding `lastPairingError` writes against two races
+ * surfaced in issue #690 (follow-up to #687 / PR #689):
+ *
+ *  1. Concurrent-attempt staleness — attempt A's approval() auto-rejects
+ *     (the SDK's ~5-min "Proposal expired" timeout) AFTER attempt B's
+ *     `initiatePairing` has already started. Without this guard, A's stale
+ *     rejection overwrites B's valid in-flight (or since-succeeded) state.
+ *  2. Reject-after-adopt race — the SAME attempt's `session_connect` event
+ *     can `adoptSession` microseconds before that attempt's own approval
+ *     promise rejects on timeout, leaving a permanent stale error next to a
+ *     healthy `paired: true` session.
+ *
+ * `initiatePairing` captures `gen = ++pairGen` at entry; its catch only
+ * writes `lastPairingError` when `gen === pairGen` at rejection time.
+ * `adoptSession` also bumps `pairGen` on a real (non-idempotent) adopt —
+ * that bump is what closes race (2): the adopt invalidates the SAME
+ * attempt's still-in-flight `gen`, so its later catch sees a mismatch and
+ * skips the write.
+ */
+let pairGen = 0;
+
 export function getLastPairingError(): PairingError | null {
   return lastPairingError;
 }
@@ -194,6 +216,11 @@ function adoptSession(
   currentSession = session;
   peerUnreachable = false;
   lastPairingError = null;
+  // Issue #690.2: invalidate any in-flight `initiatePairing` attempt's
+  // captured `gen` (including this same attempt's, if its approval promise
+  // is still racing a timeout) so a rejection that fires after this adopt
+  // can't re-set a stale error over a now-healthy session.
+  pairGen++;
   applyPeerPin(session);
   patchUserConfig({
     walletConnect: {
@@ -500,6 +527,10 @@ export interface PairResult {
 
 /** Create a new pairing + session proposal. The returned URI is what the user scans in Ledger Live. */
 export async function initiatePairing(): Promise<PairResult> {
+  // Issue #690.1/.2: pin this attempt's generation before any await so a
+  // concurrently-started later attempt (or an adopt racing this same
+  // attempt's rejection) is unambiguously detectable in the catch below.
+  const gen = ++pairGen;
   const c = await getSignClient();
   // A fresh pairing attempt supersedes any prior terminal failure — clear it
   // so a stale error from an earlier attempt doesn't leak into this one's
@@ -521,11 +552,26 @@ export async function initiatePairing(): Promise<PairResult> {
         // `paired: false` that looks like the user never paired. The durable
         // `session_connect` listener may still adopt a session out-of-band; if
         // it does, `adoptSession` clears this error.
-        lastPairingError = {
-          message: err instanceof Error ? err.message : String(err),
-          at: Date.now(),
-        };
-        wcLog("pairing approval rejected:", lastPairingError.message);
+        //
+        // Issue #690: only surface it if THIS attempt is still the current
+        // generation. A mismatch means either a newer `initiatePairing` call
+        // has since started (#690.1 — this rejection is stale), or this same
+        // attempt's session was already adopted via `session_connect` before
+        // this rejection fired (#690.2 — adoptSession bumped `pairGen`).
+        // Either way, writing the error here would overwrite valid state with
+        // a stale terminal failure.
+        if (gen === pairGen) {
+          lastPairingError = {
+            message: err instanceof Error ? err.message : String(err),
+            at: Date.now(),
+          };
+          wcLog("pairing approval rejected:", lastPairingError.message);
+        } else {
+          wcLog(
+            "pairing approval rejected (stale attempt, gen mismatch — not surfacing):",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
         throw err;
       }
     })(),

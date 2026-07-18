@@ -179,8 +179,10 @@ export const LAST_PAIRING_ERROR_GUIDANCE =
   "The most recent WalletConnect pairing attempt failed AFTER the URI/QR was shown — " +
   "Ledger Live's approval never reached this server (relay dropped the settled session, " +
   "an invalid WalletConnect projectId, or the pairing was rejected on-device). This is a " +
-  "terminal failure, not a still-pending pairing: no session was persisted. " +
-  "Tell the user the pairing did not complete and offer to retry via `pair_ledger_live`. " +
+  "terminal failure, not a still-pending pairing: no NEW session was persisted by that " +
+  "attempt (any existing session is unaffected — this can surface on a failed re-pair " +
+  "over a still-live session, not only when unpaired). " +
+  "Tell the user that attempt's pairing did not complete and offer to retry via `pair_ledger_live`. " +
   "If it keeps failing, check that WALLETCONNECT_PROJECT_ID is set to a valid Cloud project.";
 
 export const PEER_UNREACHABLE_GUIDANCE =
