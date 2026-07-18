@@ -588,6 +588,42 @@ describe("buildCustomCall — selector classifier (issue #652)", () => {
     expect(tx.decoded?.args._classifierWarning).toMatch(/exfil-pattern bypassed/);
   });
 
+  it("refuses ack-stamped transferFrom(other, ATTACKER) — recipient not wallet, NON-bypassable (issue #711)", async () => {
+    // The ack override's stated rationale is "pulling someone else's
+    // allowance TO YOURSELF is rare-but-legitimate" — nothing checked
+    // that the pulled tokens land back at the wallet. from != wallet AND
+    // to != wallet is pure value-exfil: the ack MUST NOT downgrade it.
+    await expect(
+      buildCustomCall({
+        wallet: WALLET,
+        chain: "ethereum",
+        contract: USDC,
+        fn: "transferFrom",
+        args: [ANOTHER_WALLET, ATTACKER, "1000000"],
+        value: "0",
+        abi: ERC20_TRANSFER_FROM_ABI as unknown as readonly unknown[],
+        acknowledgeKnownExfilPattern: true,
+      }),
+    ).rejects.toThrow(/CUSTOM_CALL_REFUSED[\s\S]*NOT[\s\S]*bypassable/);
+  });
+
+  it("recipient check is case-insensitive on the wallet hex (issue #711)", async () => {
+    // to == wallet hex, lowercased — must canonicalize both sides and
+    // treat this as the legitimate pull-to-own-wallet case.
+    const tx = await buildCustomCall({
+      wallet: WALLET,
+      chain: "ethereum",
+      contract: USDC,
+      fn: "transferFrom",
+      args: [ANOTHER_WALLET, WALLET.toLowerCase(), "1000000"],
+      value: "0",
+      abi: ERC20_TRANSFER_FROM_ABI as unknown as readonly unknown[],
+      acknowledgeKnownExfilPattern: true,
+    });
+    expect(tx.data.startsWith("0x23b872dd")).toBe(true);
+    expect(tx.decoded?.args._classifierWarning).toMatch(/exfil-pattern bypassed/);
+  });
+
   it("attaches a soft-warn annotation to ERC-721 safeTransferFrom (no refusal)", async () => {
     const tx = await buildCustomCall({
       wallet: WALLET,
