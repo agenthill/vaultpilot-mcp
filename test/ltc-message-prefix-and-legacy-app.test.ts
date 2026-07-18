@@ -360,3 +360,64 @@ describe("issue #240 — legacy createPaymentTransaction fallback", () => {
     expect(createPaymentTransactionMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Issue #698 — drift guard for the legacy-app fallback trigger.
+ *
+ * The fallback above matches on `msg.includes(LTC_LEGACY_APP_ERROR_MARKER)`,
+ * a substring of an unversioned string that `@ledgerhq/hw-app-btc` throws.
+ * `package.json` pins it with a caret (`^10.21.1`), so a patch release can
+ * silently reword the string; every mock in this file (including the one
+ * above) hardcodes the SAME literal, so it stays green even if the real
+ * SDK's text changes underneath it.
+ *
+ * This test does NOT go through `vi.mock("../src/signing/ltc-usb-loader.js")`
+ * — that mock only replaces the high-level loader (see its module-level
+ * `vi.mock` call above), not `@ledgerhq/hw-app-btc` itself, exactly like the
+ * `@ledgerhq/hw-app-btc bs58/base-x subtree` guard in `test/btc-pair.test.ts`.
+ * It instantiates the REAL `Btc` class with `currency: "litecoin"` — which
+ * always resolves to the legacy `BtcOld` implementation (see
+ * `ltc-usb-loader.ts`'s `openLedger`) — and calls the real `signPsbtBuffer`,
+ * which throws synchronously before touching the transport. If a future
+ * `@ledgerhq/hw-app-btc` patch (still satisfying `^10.21.1`) reworks this
+ * string, `realMessage` below stops equaling `LTC_LEGACY_APP_ERROR_MARKER`
+ * and this test goes red — loudly, in CI, on the installed version — instead
+ * of the fallback silently stopping firing in production.
+ */
+describe("issue #698 — legacy-app error string drift guard (real SDK)", () => {
+  it("the real installed @ledgerhq/hw-app-btc still throws the pinned marker for currency: litecoin", async () => {
+    const { LTC_LEGACY_APP_ERROR_MARKER } = await import(
+      "../src/signing/ltc-usb-signer.js"
+    );
+
+    const btcRequire = createRequire(
+      requireCjs.resolve("@ledgerhq/hw-app-btc/package.json"),
+    );
+    const Btc = btcRequire("@ledgerhq/hw-app-btc").default as new (arg: {
+      transport: unknown;
+      currency: string;
+    }) => { signPsbtBuffer(buf: Buffer, opts: unknown): Promise<unknown> };
+    const Transport = btcRequire("@ledgerhq/hw-transport")
+      .default as new () => unknown;
+
+    // Real base Transport (not a fake stub) — its `decorateAppAPIMethods`
+    // and no-op `setScrambleKey` are what the Btc constructor relies on;
+    // neither is reached before the synchronous throw under test.
+    const transport = new Transport();
+    const app = new Btc({ transport, currency: "litecoin" });
+
+    let realMessage: string | undefined;
+    try {
+      await app.signPsbtBuffer(Buffer.alloc(0), {
+        finalizePsbt: true,
+        accountPath: "84'/2'/0'",
+        addressFormat: "bech32",
+        knownAddressDerivations: new Map(),
+      });
+    } catch (err) {
+      realMessage = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(realMessage).toBe(LTC_LEGACY_APP_ERROR_MARKER);
+  });
+});
