@@ -39,6 +39,7 @@ import {
   summarizePatchResults,
 } from "./setup/register-clients.js";
 import { buildInstallEnvelope } from "./setup/output-json.js";
+import { fetchWithTimeout } from "./data/http.js";
 import type { RpcProvider, SupportedChain, UserConfig } from "./types/index.js";
 
 /**
@@ -266,7 +267,7 @@ async function configureSafe(p: Prompt): Promise<string | undefined> {
 async function validateTronApiKey(apiKey: string): Promise<void> {
   // USDT-TRC20 address — well-known, always returns 200 on a healthy grid.
   const url = "https://api.trongrid.io/v1/accounts/TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
-  const res = await fetch(url, { headers: { "TRON-PRO-API-KEY": apiKey } });
+  const res = await fetchWithTimeout(url, { headers: { "TRON-PRO-API-KEY": apiKey } });
   if (!res.ok) {
     throw new Error(`TronGrid returned ${res.status} ${res.statusText}`);
   }
