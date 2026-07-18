@@ -34,7 +34,7 @@ Solana inserts one extra hop (`preview_solana_send`, blockhash pin); BTC/LTC/TRO
 | **Solana multisig prepare/send** | `@sqds/multisig` is wired read-only (pending-upgrade incident monitoring). No signing flow exists, asymmetric with BTC's full cosigner flow — by design for v1. | **Exit criterion:** `grep -rn "@sqds/multisig" src/` matches only `modules/incidents/{solana-known,squads-pending}.ts`; no `prepare_squads_*` tool registered. |
 | **Server-side key custody** | The server never holds a private key. All signing is on the Ledger device (USB `hw-app-*`) or the WalletConnect peer (Ledger Live). | **Exit criterion:** no seed/mnemonic/privkey field in any schema or config; `grep -rn "mnemonic\|privateKey\|seedPhrase" src/` finds no persisted-secret path. |
 | **Generic retry/backoff wrapper** | Only viem's transport retries (transient-classified). TRON/BTC/LTC/Solana broadcast are single-shot by design — explicit failure beats silent retry-storms (issue #326 context). | **Exit criterion:** no exponential-backoff retry helper outside `data/rpc.ts`'s viem transport; broadcast paths surface the error to the caller. |
-| **Live-capital automation / lint tooling** | Out of product scope for v1 (lint absent by choice, recon @ c1b373a); no strategy-promotion surface here. | n/a |
+| **Live-capital automation / strategy promotion** | No autonomous strategy-promotion or scheduled-trading surface exists in v1; the agent proposes, the human signs on-device. | **Exit criterion:** no scheduler/cron/`setInterval` in the repo drives a `prepare_*`/`send_transaction` — the only always-on timers are the oracle poller and the WC keepalive (§4), neither of which touches the signing path. (Lint-tooling absence is a gap, not a non-goal — it is the INV-T1 lint-rule convergence unit, §4/§8, not a defended boundary.) |
 
 ---
 
@@ -53,27 +53,29 @@ No `SPEC.md` exists. Every driving number below is `ASSUMED:` and is a doc defec
 
 | # | Constraint | ASSUMED value | Rests on | Verdict |
 |---|---|---|---|---|
-| R1 | Read-tool (`get_*`/`list_*`) p95 latency, interactive path | ≤ 3 s | §4 amplification table; O(1)-round-trip-per-chain reads | MEETS — portfolio/balance readers are multicall-batched O(1) round-trips per chain (recon: `positions/aave.ts`, `positions/uniswap.ts`, `balances/index.ts`). |
-| R2 | `prepare_*` p95 latency | ≤ 8 s | chain reads + `simulateTx` eth_call + build | MEETS with one caveat — depends on R6 (no untimed transport on the path); FAILS today via the Solana/4byte timeout gaps (§4). |
-| R3 | `preview_send` p95 latency | ≤ 10 s | `assertTransactionSafe` + `simulateTx` + gas pin + WC account-match | MEETS structurally; same R6 caveat. |
-| R4 | `send_transaction` device-wait ceiling | ≤ 120 s hard | human-in-the-loop device approval, not a compute budget | MEETS — `WC_SEND_REQUEST_TIMEOUT_MS` ~120 s with late-broadcast probe (recon: `walletconnect.ts`). |
+| R1 | Read-tool (`get_*`/`list_*`) p95 latency, interactive path | ≤ 3 s | §4 amplification table; O(1)-round-trip-per-chain reads | **structurally plausible, UNMEASURED** — readers are multicall-batched O(1) round-trips per chain (recon: `positions/aave.ts`, `positions/uniswap.ts`, `balances/index.ts`), but **no p95 has been timed on the live path**; the verdict is a round-trip count, not a measurement (circular). Convergence: p95 latency bench (§8). |
+| R2 | `prepare_*` p95 latency | ≤ 8 s | chain reads + `simulateTx` eth_call + build | **structurally plausible, UNMEASURED** — no p95 timed. Rests on R6 (no untimed transport) AND on the viem retry backoff being bounded (`data/rpc.ts` `retryCount 4` / `retryDelay 700` ≈ 10.5 s worst-case backoff, **no per-attempt timeout pinned** — §4). The Solana/4byte timeout gaps (§4) put a possible hang on this path today. |
+| R3 | `preview_send` p95 latency | ≤ 10 s | `assertTransactionSafe` + `simulateTx` + gas pin + WC account-match | **structurally plausible, UNMEASURED** — no p95 timed; same R6 + viem-backoff caveats as R2. |
+| R4 | `send_transaction` device-wait ceiling | ≤ 120 s hard | human-in-the-loop device approval, not a compute budget | **MEETS** — checks a real enforced constant `WC_SEND_REQUEST_TIMEOUT_MS` ~120 s with late-broadcast probe (recon: `walletconnect.ts`). A structural falsifier for a hard ceiling, not a circular latency claim. |
 | R5 | Worst-case external HTTP calls per single read-tool invocation | ≤ 50 (concurrency-capped 10) | schema cap × per-item fan-out | MEETS for `get_transaction_history` (schema `.max(50)`); **FAILS** for `get_daily_briefing` (composite ~371, §4 F5) and `resolveSelectors` (unbounded, §4). |
 | R6 | Every process/network-boundary call carries an explicit in-code timeout | 100% of tool-reachable transports | robustness invariant (§4) | **FAILS today** — Solana `Connection` and `4byte.directory` are untimed (§4). Convergence targets. |
-| R7 | Default (unconfigured) install tool count | ≤ 64 tools | per-turn schema-text budget the host pays every turn | **FAILS today** — default is all 189 (§6). |
-| R8 | Default (unconfigured) install host-visible schema text | ≤ 96 KB | context cost | **FAILS today** — ~227 KB across 189 blocks (recon @ c1b373a, §6). |
-| R9 | Max lines per module (god-module smell threshold) | ≤ 800 | simplicity / deep-modules (§5) | **FAILS** — `execution/index.ts` 4013, `render-verification.ts` 2850, `types/index.ts` 1871 (§5). |
-| R10 | Max branch-per-chain `switch` arms in a dispatch | ≤ 8 | data-model-before-logic (§5) | **FAILS** — `solanaActionLabel` 20+ arms (§5). |
-| R11 | Max exports / lines per `types/*` domain file | ≤ 20 exports, ≤ 600 lines | one-fact-one-home (§5) | **FAILS** — `types/index.ts` 59 exports / 1871 lines (§5). |
+| R7 | Default (unconfigured) install tool count | **PROD to set** if a curated default is adopted | per-turn schema-text budget the host pays every turn | **OPEN PROD DECISION** — a default install registers all ~189 tools (§6). Whether a fresh install defaults to a curated CORE set is PROD's call, not a doc-asserted number. |
+| R8 | Default (unconfigured) install host-visible schema text | **PROD to set** if a curated default is adopted | context cost | **OPEN PROD DECISION** — measured ~227 KB schema text across ~189 blocks (recon @ c1b373a, §6). The byte budget is PROD's to set, not a doc-asserted target. |
+| R9 | Module cohabits >1 named responsibility (god-module smell) | structural, not numeric | deep-modules / one-responsibility (§5) | **FAILS structurally** — `execution/index.ts`, `render-verification.ts`, `types/index.ts` each cohabit multiple unrelated responsibilities (§5). Recon line counts (4013 / 2850 / 1871 L @ c1b373a) are EVIDENCE of bloat, not the gate. |
+| R10 | Cross-chain dispatch is a conditional chain rather than a per-chain table/registry | structural | data-model-before-logic (§5.3) | see §5.3 — the render layer's per-chain logic is ~50 already-separated functions, not one big switch; the real target is grouping them into per-chain modules behind a thin dispatch (recon @ c1b373a: exactly one `switch`, Solana-internal, not cross-chain). |
+| R11 | `types/*` not split by named domain | structural | one-fact-one-home (§5.4) | **FAILS structurally** — `types/index.ts` holds chain consts + position shapes + tx shapes + device entries + config with no internal boundary (recon: 59 exports / 1871 L @ c1b373a — evidence, not gate). |
 | R12 | Handle-store TTL (prepare → send binding window) | 15 min (current) | replay/immutability window (§3) | MEETS — `TX_TTL_MS` 15 min, lazy prune (recon: `tx-store.ts`). Flag R12 to PROD: confirm 15 min is the intended UX ceiling. |
-| R13 | Externally-metered-dependency spend alarm | present per 24/7 dependency | metered-resources canon | **UNKNOWN** — no usage/spend alarm found in recon; PROD must state whether a 24/7 deployment is in scope (the oracle poller, §4, is the only always-on caller). |
+| R13 | Externally-metered-dependency spend alarm | present per 24/7 dependency | metered-resources canon | **UNKNOWN** — no usage/spend alarm found in recon; PROD must state whether a 24/7 deployment is in scope. Two always-on `setInterval` loops exist (§4): the oracle poller (metered Solana RPC each tick) and the WC keepalive (relay ping); the poller is the metered-spend concern. |
 
-**R7/R8 note.** R7 is the tool-count budget; R8 is the byte budget; they are independent and both routed to PROD as the §6 product decision.
+**R7/R8 note.** R7 (tool count) and R8 (schema bytes) are independent PROD decisions, not doc-asserted budgets — both routed to PROD as the §6 product decision. Neither carries a target number in this doc.
+
+**R1/R2/R3 note.** All three latency verdicts rest on static round-trip counting, not any live-measured p95 — the same code-shape that set the target certifies it, which is circular. They are relabelled UNMEASURED and the p95 latency bench (§8) is the convergence unit that would make them measurable. R4 is the exception: it checks an enforced hard-ceiling constant, a legitimate structural falsifier.
 
 ---
 
 ## 3. Trust model & the pre-sign safety spine
 
-This is the security centerpiece. Every item is a **preserved invariant** with an enforcing `file:line`. All line citations in this section were verified against live code at `c1b373a`.
+This is the security centerpiece. Every item is a **preserved invariant** named by its enforcing **symbol/module** — the normative anchor is the named symbol (`assertTransactionSafe`, `runEvmPreSignGuards`, `previewSend`, `sendTransaction`, `issueHandles`, `applyCustomCallClassifier`, …), never a raw line number. Line numbers self-invalidate under the §5.2 decomposition that moves these very files, so **every `Lxxxx` in §3 is a `recon @ c1b373a` evidence pointer, not a normative anchor.** Citations were spot-checked against live code at `c1b373a`; the check was not exhaustive — one omission the recon missed is called out in §3.2 (the `transferFrom` recipient gap).
 
 ### 3.1 `assertTransactionSafe` — the 5 ordered blocks
 
@@ -94,20 +96,27 @@ Three server-stamped flags bypass parts of the gate. Their safety rests entirely
 | Flag | Bypasses | Trust source (what makes the bypass safe) |
 |---|---|---|
 | `acknowledgedNonAllowlistedSpender` | B2 approve-allowlist | Stamped by a `prepare_*` tool (e.g. `curve/actions.ts` L464) only after the user passed a schema-enforced `acknowledgeNonAllowlistedSpender: true`; flows through the server-minted handle, never agent input. |
-| `acknowledgedNonProtocolTarget` | B4 catch-all | Stamped by `prepareCustomCall` (`execution/index.ts` L2848) after its build-time ack gate + exfil classifier. |
+| `acknowledgedNonProtocolTarget` | B4 catch-all | Stamped by `prepareCustomCall` (`execution/index.ts`, recon @ c1b373a L2848) after its build-time ack gate + the `applyCustomCallClassifier` exfil check. **CAVEAT — classifier recipient gap** (`security:transferfrom-recipient-unchecked`, CONFIRMED): the classifier computes `transferFromSelfAsFrom` from `args[0]` (the `from`) only (`modules/custom-call/actions.ts`) and never inspects `args[1]` (the recipient), so `transferFrom(from=X≠wallet, to=ATTACKER)` is **ack-bypassable with an arbitrary recipient** — contradicting the classifier's own "pulling to yourself is rare-but-legitimate" rationale, which assumes `to==wallet` but is never verified. ARCH is filing this as a security convergence unit (§8). |
 | `safeTxOrigin` | B4 catch-all | Stamped by the Safe builders (`safe/execute.ts` L212); the OUTER calldata is always `approveHash`/`execTransaction`, which carries no transferable authority on its own (see 3.5). |
 
 **The single load-bearing invariant the entire bypass system rests on** (`security:presign-ack-trust-root`, blocking): these flags are **NEVER accepted as agent input.** `send_transaction` / `preview_send` take only an **opaque `handle` string**. The tx-with-flags is stamped by server code and stored in a UUID-keyed in-memory `Map` by `issueHandles` (`tx-store.ts` L123-150); the agent gets back only the handle (the stored value even strips the handle key, L145). `consumeHandle` (L163) is a non-destructive peek; `retireHandle` (L180) deletes on successful submit; TTL 15 min (`TX_TTL_MS`).
 
 > **Convergence guardrail (do NOT drift):** any future tool that accepts a caller-supplied tx object, or exposes any of these flags in an input schema, collapses every catch-all/selector defense behind one forgeable boolean. **Exit criterion:** no tool input schema in `src/index.ts` contains `acknowledgedNonProtocolTarget`, `safeTxOrigin`, or `acknowledgedNonAllowlistedSpender`; `send_transaction`/`preview_send` accept only `{handle, previewToken, userDecision, …}`, never a raw `tx`.
 
+> **Classifier-specific exit criterion** (`security:transferfrom-recipient-unchecked`): a regression test asserting a `transferFrom` custom call is ack-bypassable **only when its recipient (`args[1]`) equals the wallet** — `transferFrom(from=X, to=ATTACKER)` with `to≠wallet` must be REFUSED or non-ack-bypassable, checked **independently of the schema-absence check above**. RED today: the recipient is unchecked, so an arbitrary `to` currently passes the ack bypass.
+
 ### 3.3 Guards run at preview, NOT at send (important invariant)
 
 `runEvmPreSignGuards` (`execution/index.ts` L3027) = `assertTransactionSafe` (L3029) + `simulateTx` (L3030) + WC account-match + payload-hash recheck. It is invoked **ONLY** from `previewSend` (L3194) and tests. The EVM `sendTransaction` path (L3373-3516) does `getPinnedGas` (L3417) → `previewToken` match (L3450) → `consumeHandle` (L3480) → forward to WC → `retireHandle` (L3516). **It never re-runs the gate or simulation.** The cached-pin branch of `previewSend` (L3171-3189) also returns without re-running guards.
 
-Send-time safety therefore rests on exactly two facts: **(a) tx-store immutability** — no code mutates `StoredTx.tx` after `issueHandles`; **(b) previewToken binding** — a matching `previewToken` proves `preview_send` ran the guards on *this exact immutable tx*.
+Send-time safety therefore rests on two facts that ARE enforced, plus one commonly-assumed property that is **NOT** enforced today:
 
-> **MANDATORY exit criterion (write as a required regression test):** a `send_transaction` presenting a tx whose `previewToken` does not match the stored pin, OR a tx mutated in the store between preview and send, MUST be REFUSED. A regression test must go **RED** if the `previewToken` equality check (L3450) is removed or if `StoredTx.tx` becomes mutable. `test/preview-token-gate.test.ts` + `test/send-hash-pin.test.ts` (recon, tests dim) are the homes; the target is that the binding-removal falsifier is covered and stays RED-on-removal. This is a silent-failure surface: a future send path that skips preview bypasses the whole gate with no error.
+- **(a) the agent cannot substitute a tx.** `send_transaction`/`preview_send` take only the opaque handle; the tx-with-flags lives server-side, keyed by `randomUUID` in `issueHandles`. The agent never holds the tx object, so it cannot swap it — this, not immutability, is why a substitute tx cannot be sent.
+- **(b) the previewToken + gas-pin binding.** The send path refuses with "Missing pinned gas … Call `preview_send(handle)` first" (`getPinnedGas` in `sendTransaction`, recon @ c1b373a L3417-3420) unless `preview_send` ran the guards and pinned gas for THIS handle, and the `previewToken` equality check binds the pin to the previewed tx. This is the real send-time guarantee.
+- **(c) NOT enforced — deep immutability of the stored tx.** `issueHandles` stores the tx via a shallow spread into a plain `Map` with **no `Object.freeze`** (verified — no freeze in `tx-store.ts`); nested fields are shared by reference and `consumeHandle` returns the live object by reference. The EVM `sendTransaction` path does **no** send-time content re-check between `consumeHandle` and the WC forward. So "the stored tx is immutable" is an ASSUMPTION the code does not perform; today it holds only because no path mutates it and the agent cannot reach it — there is no refusal that would fire if it were mutated.
+
+> **Exit criterion for (a)+(b) — already enforceable:** a `send_transaction` whose `previewToken` does not match the stored pin, or which has no pinned gas, MUST be REFUSED; `test/preview-token-gate.test.ts` + `test/send-hash-pin.test.ts` (recon, tests dim) go **RED** if the `previewToken` equality check or the "Missing pinned gas" backstop is removed. Silent-failure surface: a future send path that skips preview bypasses the whole gate with no error.
+> **Convergence target for (c)** (`security:tx-store-deep-freeze`, to-be-added — a real security-spine improvement, ARCH is filing it, §8): add a deep `Object.freeze` in `issueHandles` AND a regression test that mutates a stored tx between preview and send and asserts the send uses the **pre-mutation** values — RED without the freeze. The immutability invariant is stated here as this **to-be-added** test, NOT as an already-passing one.
 
 ### 3.4 REVIEW-FLAGGED: LiFi Diamond bypasses B5 while on the spender allowlist
 
@@ -136,10 +145,10 @@ Cross-cutting rules every external call obeys, each with a falsifiable check. Th
 **Target:** NO raw `fetch(` and NO untimed SDK client sits on any tool path; every transport routes through a timeout-enforcing wrapper.
 
 Two grounded gaps (both CONFIRMED against live code):
-- **Solana `Connection` — untimed (blocking, `robustness:solana-conn-no-timeout`).** `modules/solana/rpc.ts` `getSolanaConnection()` builds `new Connection(url, {commitment:"confirmed", fetch: fetchWithRateLimitDetect})` (L133). The shim `fetchWithRateLimitDetect` (L43) does `await fetch(input, init)` with **no AbortSignal, no timeout** — every Solana RPC call, **including `broadcastSolanaTx`**, can hang indefinitely. This is the single largest robustness gap. The oracle poller (below) funnels through it.
+- **Solana `Connection` — untimed (blocking, `robustness:solana-conn-no-timeout`).** `modules/solana/rpc.ts` `getSolanaConnection()` builds `new Connection(url, {commitment:"confirmed", fetch: fetchWithRateLimitDetect})`. The shim `fetchWithRateLimitDetect` does `await fetch(input, init)` with **no AbortSignal, no timeout** — every Solana RPC call, **including `broadcastSolanaTx`**, can hang indefinitely. This is the single largest robustness gap; the oracle poller (below) funnels through it. (Related, minor — `robustness:solana-conn-cache-race`: `getSolanaConnection` rebuilds `cachedConnection` when the resolved URL changes with **no concurrency guard** against in-flight calls holding the old `Connection` during the swap; benign today but consciously tracked, §8.)
 - **`4byte.directory` — untimed on the pre-sign path (blocking, `robustness:fourbyte-no-timeout-presign`).** `data/apis/fourbyte.ts` (19 lines) `defaultFetch = (url) => fetch(url)` — raw, no timeout — reachable unguarded from `signing/verify-decode.ts` (pre-sign calldata cross-check) and `modules/history/decode.ts`.
 
-**Exit criterion:** a grep-able assertion `grep -rn "fetch(" src/ | grep -v "fetchWithTimeout\|fetchWithRateLimitDetect\|node-fetch import"` returns only the timeout-wrapper internals and self-contained AbortController sites (`nft/helius-das.ts`); specifically `modules/solana/rpc.ts`'s shim carries an AbortSignal and `data/apis/fourbyte.ts` routes through `fetchWithTimeout`. (`data/rpc.ts` viem `http()` also relies on an implicit default timeout — pin it explicitly, `robustness:viem-timeout-implicit`.)
+**Exit criterion (structural lint rule, NOT a grep — `robustness:lint-ban-bare-fetch`, to be added as a convergence unit):** an ESLint rule bans bare `fetch(` / `globalThis.fetch` outside `data/http.ts`, OR requires every exported fetch-wrapping function to thread an `AbortSignal`. **A substring grep does not work here and must not be used as the gate:** the `const f = fetchOverride ?? globalThis.fetch; f(url)` aliasing idiom (live in `nft/helius-das.ts` and `shared/version-check.ts`) evades any `fetch(` match by identifier-aliasing, and a bare `fetch(` grep also floods with SDK-method noise (`MarginfiClient.fetch()`, `MarginfiAccountWrapper.fetch()`). The target is structural: every transport routes through a timeout-enforcing wrapper, enforced by lint rule X — specifically `modules/solana/rpc.ts`'s shim must carry an `AbortSignal` and `data/apis/fourbyte.ts` must route through `fetchWithTimeout`. (`data/rpc.ts` viem `http()` sets `retryCount: 4` / `retryDelay: 700` — up to ~10.5 s of exponential backoff — with **no per-attempt request timeout pinned** (recon @ c1b373a L214-215); pin an explicit per-attempt timeout, `robustness:viem-timeout-implicit`. This backoff is a **second untimed latency risk** on the prepare/preview path, feeding the now-UNMEASURED R2/R3.)
 
 ### INV-T2 — upstream error objects are never serialized verbatim into tool responses
 
@@ -168,25 +177,29 @@ Per the "name the amplification factor" canon: requests-per-minute × concurrent
 
 Origin-of-call is the boundary, not caller identity. **Target:** no mount/timer/auto-refresh originates a metered call; explicit user action may hit a metered dependency only for genuinely fresh O(1) data.
 
-**The one poller:** `modules/incidents/oracle-poller.ts` `startOraclePoller()` — a 60 s `setInterval` (L120) over a fixed `KNOWN_PYTH_FEEDS` list. **Two grounded requirements** (`robustness:oracle-poller-overlap`, CONFIRMED): (a) it has **no in-flight overlap guard** — a slow tick can stack on the prior tick; (b) each tick funnels through the untimed Solana `Connection` (INV-T1), so one hung tick can wedge the poller. **Exit criterion:** the poller carries an in-flight boolean/skip-if-running guard AND its Solana calls are timed; a test that stalls one tick asserts the next tick is skipped, not stacked. Also record R13 (spend alarm) as the missing companion for any 24/7 deployment.
+**Two always-on `setInterval` loops** (not one — R13's "only always-on caller" phrasing is corrected here):
+- **Oracle poller** — `modules/incidents/oracle-poller.ts` `startOraclePoller()`, a 60 s interval over a fixed `KNOWN_PYTH_FEEDS` list. **Two grounded requirements** (`robustness:oracle-poller-overlap`, CONFIRMED): (a) **no in-flight overlap guard** — a slow tick can stack on the prior tick; (b) each tick funnels through the untimed Solana `Connection` (INV-T1), so one hung tick can wedge the poller. **Exit criterion:** the poller carries an in-flight boolean/skip-if-running guard AND its Solana calls are timed; a test that stalls one tick asserts the next tick is skipped, not stacked. Filed as a convergence unit (§8).
+- **WalletConnect keepalive** — `signing/walletconnect.ts` `startKeepalive()` (`KEEPALIVE_INTERVAL_MS` = 30 s), running for the life of any paired WC session. **COMPLIANT — no unit owed:** each tick calls `probeSessionLiveness`, which carries its own `PING_TIMEOUT_MS` = 5 s bound (recon @ c1b373a), so a hung tick cannot wedge it, and the timer does not block clean process exit. Named here so the "only always-on caller" claim is not repeated elsewhere.
 
-**In-memory cache bound (`reads:F6`).** `data/cache.ts` `TTLCache` is `Map`-backed with lazy-on-`get` expiry, **no LRU / no key-count cap** — a long-lived process serving many wallets accumulates an ever-growing map (30-day historical-price keys are the worst). **Target/exit criterion:** a max-key-count or size bound with a defined eviction (drop-oldest/LRU) on overflow. Never cache a safety/authorization verdict over a mutable fact — the four `SECURITY_*`-prefixed long-TTL categories (24 h verification, 1 h permissions/risk) are flagged for the security reviewer to confirm they cache facts, not verdicts.
+Also record R13 (spend alarm) as the missing companion for any 24/7 deployment; the metered-spend concern is the oracle poller, not the WC keepalive (relay ping, not a metered RPC quota).
+
+**In-memory cache bound (`reads:F6`).** `data/cache.ts` `TTLCache` is `Map`-backed with lazy-on-`get` expiry, **no LRU / no key-count cap** — a long-lived process serving many wallets accumulates an ever-growing map (30-day historical-price keys are the worst). **Target/exit criterion:** a max-key-count or size bound with a defined eviction (drop-oldest/LRU) on overflow. Never cache a safety/authorization verdict over a mutable fact — **the `SECURITY_*`-prefixed long-TTL categories were adjudicated (call sites read) and CLOSED as compliant**, not punted: `SECURITY_PERMISSIONS` (1 h) caches the Aave Pool address + `getUserAccountData` aggregates (a position READ); `SECURITY_VERIFICATION` (24 h) caches Etherscan contract-info (isVerified/isProxy/abi). These cache **facts, not authorization verdicts**, and none sits on the signing path — compliant with the canon, no security-reviewer flag owed. Standing note: any FUTURE cache added on the signing path must re-run this fact-vs-verdict check before it lands.
 
 ---
 
 ## 5. Module architecture (target)
 
-The simplified target module map. Each item: current-state evidence (`recon @ c1b373a`) + a TARGET as a falsifiable structural check. Thresholds (R9/R10/R11) are `ASSUMED` and tunable by PROD. The organizing principle is **deep modules with small interfaces**: the goal is not "smaller files" for their own sake but ending the cohabitation of unrelated responsibilities behind one edit surface.
+The simplified target module map. Each item: current-state evidence (`recon @ c1b373a`) + a TARGET as a falsifiable **structural** check — never a line/export/arm count. The organizing principle is **deep modules with small interfaces**: the goal is not "smaller files" for their own sake but ending the cohabitation of unrelated responsibilities behind one edit surface. R9/R10/R11 are **demoted from exit criteria to non-binding evidence**: recon line/arm/export counts appear below only as EVIDENCE of current bloat (`recon @ c1b373a`), never as the gate — a module passes when it stops cohabiting unrelated responsibilities, whatever its line count.
 
 ### 5.1 UTXO chain unification (BTC/LTC Esplora indexer)
 
 **Evidence.** `modules/btc/indexer.ts` (708 L) and `modules/litecoin/indexer.ts` (676 L) are ~90% duplicated Esplora clients — the LTC file's own header says "Mirror of src/modules/btc/indexer.ts — same Esplora API surface, same retry policy, same field shapes; only the default URL and user-config field name differ" (recon @ c1b373a). Token-normalized diff: 168 changed lines of ~700. **The precedent already exists:** `modules/utxo/rpc-client.ts` (140 L) is a chain-agnostic Bitcoin-Core-RPC client used by BOTH `incidents/chain-utxo.ts` and `execution/index.ts` — the RPC-forensics layer got the shared-adapter treatment the Esplora indexer never did.
 
-**Target.** One parametrized Esplora client — `modules/utxo/esplora-client.ts` — taking chain (`btc`|`ltc`) as a parameter (default URL + config-field-name injected). BTC/LTC tool families become chain-parameterized, not verb-duplicated.
+**Target.** One parametrized Esplora client — `modules/utxo/esplora-client.ts` — taking chain (`btc`|`ltc`) as a parameter (default URL + config-field-name injected). BTC/LTC tool families become chain-parameterized, not verb-duplicated. **Asymmetry to PRESERVE, not flatten:** `BitcoinIndexer` exposes `getTx(txid)` (recon @ c1b373a — interface L221, impl L549) that `LitecoinIndexer` **lacks**; it backs the BTC RBF fee-bump builder. The parametrized client must keep `getTx` available for BTC — do NOT drop or stub it to force a symmetric interface. The related LTC RBF capability gap (below) is a CONNECTED item (LTC could later gain the tool + `getTx`), not part of this dedup.
 
 **Preserve as a DECISION RECORD, not dup to delete:** the LTC **signer** divergence. `ltc-usb-signer.ts` (1073 L) is ~95% structurally identical to `btc-usb-signer.ts` (843 L) EXCEPT the issue-#240 legacy-API fallback (`signLtcPsbtViaLegacyApi` L754, `encodeVarInt` L695, ~230 lines) triggered by string-matching the SDK error "signPsbtBuffer is not supported with the legacy Bitcoin app" (L678, verified). This is a load-bearing divergence for Ledger's Litecoin app v2.4.11 — **do not merge it away.** (The string-match trigger is itself fragile — `signing:ltc-legacy-fallback-string-match`, CONFIRMED bug — but that is a robustness fix, not a merge.)
 
-**Falsifiable target.** Exactly one Esplora client module; `grep -rn "class.*Esplora\|Esplora API surface" src/modules/` finds one home, not two; no structural twin of `btc/indexer.ts` under `litecoin/`. The signer files stay two, with the divergence documented here. (Also close the LTC capability gap OR record it: LTC carries `rbfEligible` plumbing but registers no `prepare_litecoin_rbf_bump`, and has no lifi-swap/multisig — `nonevm:litecoin-capability-gap`. Target: either register the tools or state the gap as intentional in §7.)
+**Falsifiable target.** Exactly one Esplora client module with a chain parameter; no structural twin of `btc/indexer.ts` under `litecoin/`; `getTx` remains reachable for BTC. The signer files stay two, with the divergence documented here. (**Connected, NOT part of the dedup** — the LTC capability gap: LTC carries `rbfEligible` plumbing but registers no `prepare_litecoin_rbf_bump`, and has no lifi-swap/multisig — `nonevm:litecoin-capability-gap`. Target: either register the tools or state the gap as intentional in §7. Do not conflate closing this gap with the indexer dedup.)
 
 ### 5.2 `execution/index.ts` decomposition (the god module)
 
@@ -196,46 +209,48 @@ The simplified target module map. Each item: current-state evidence (`recon @ c1
 3. Solana lending/staking/swap prepare + send pipeline (`sendSolanaTransaction`);
 4. TRON send + swap prepare;
 5. EVM `prepare_*` handlers (thin delegates to per-protocol action modules);
-6. shared preview/send/verify pipeline (`runEvmPreSignGuards`, `previewSend`, `sendTransaction`, `getTransactionStatus`, `verifyTxDecode`).
+6. EVM-only preview/send pipeline (`runEvmPreSignGuards`, `previewSend`, `sendTransaction` — the §3.3 spine);
+7. **cross-chain** status/verification dispatch (`getTransactionStatus`, `verifyTxDecode`, `getVerificationArtifact` — each branches tron/EVM/Solana, recon @ c1b373a L3527 / L4000 / L3849; these are NOT EVM-scoped and must not fold into the EVM send-pipeline).
 
 **Target — decompose along those named seams:**
 
 | Responsibility | Target module |
 |---|---|
 | Ledger pairing (5 chains) | `modules/pairing/index.ts` |
-| EVM preview/send/verify pipeline (the §3.3 spine) | `signing/send-pipeline.ts` (co-located with the gate it enforces) |
+| EVM preview/send pipeline (the §3.3 spine) | `signing/send-pipeline.ts` (co-located with the gate it enforces) |
+| Cross-chain status/verification dispatch | `signing/status-dispatch.ts` + `signing/verification-artifact.ts` (compose the per-chain status/verify modules; NOT folded into the EVM send-pipeline — each branches tron/EVM/Solana) |
 | EVM `prepare_*` dispatch | `modules/evm-prepare/index.ts` (thin; per-protocol logic already lives in `modules/{aave,uniswap,lido,…}`) |
 | BTC/LTC RPC + UTXO/rescan wrappers | fold into `modules/btc/` + `modules/litecoin/` (or the unified §5.1 layer) |
 | Solana send pipeline | `modules/solana/send.ts` |
 | TRON send pipeline | `modules/tron/send.ts` (partly exists — `sendTronTransaction`) |
 
-**Trade-off (judged).** Decomposition adds ~6 files and one dispatch indirection. Tie to R9 (simplicity/context-cost) and testability: the send pipeline (§3.3) is safety-critical and today cannot be tested without importing a 4013-line module (the exact heavy-import cost behind the `hookTimeout` flake, issue #691). MEETS — the added files are removable-by-editing-one-place; the indirection is a thin dispatch, not a new abstraction layer.
+**Trade-off (judged).** Decomposition adds ~7 files and one dispatch indirection. Tie to simplicity/context-cost and testability: the send pipeline (§3.3) is safety-critical and today cannot be tested without importing a 4013-line module (the exact heavy-import cost behind the `hookTimeout` flake, issue #691). Worth it — the added files are removable-by-editing-one-place; the indirection is a thin dispatch, not a new abstraction layer.
 
-**Falsifiable target.** No single module cohabits >1 of {pairing, evm-send-pipeline, evm-prepare-dispatch, utxo-rpc, solana-send, tron-send}; `execution/index.ts` is either deleted or reduced to a re-export barrel ≤ `ASSUMED 400` lines; a structural test asserts each named symbol resolves to its target file.
+**Falsifiable target (structural AND spine-gated).** No single module cohabits >1 of {pairing, evm-send-pipeline, evm-prepare-dispatch, utxo-rpc, solana-send, tron-send} — with **one named allowed exception**: `signing/status-dispatch.ts` / `signing/verification-artifact.ts` legitimately compose per-chain status/verify modules; cross-chain dispatch IS their single responsibility, not a god-module relapse (this exception is named explicitly because live code already routes these three symbols across chains — a blanket "no module is multi-chain" assertion would be false on day one). `execution/index.ts` ends deleted or reduced to a thin re-export barrel; a structural test asserts each named symbol resolves to its target file. **AND — the decomposition is DONE only if ALL §3 spine falsifiers still pass AND still go RED-on-removal after the move:** the preview-token gate + gas-pin backstop (§3.3), the per-block `assertTransactionSafe` tests (§3.1), and the ack-flag tests (§3.2). This relocation splits the ack-flag STAMP site (`prepareCustomCall`'s `built.acknowledgedNonProtocolTarget = true`, recon @ c1b373a L2848) from the ack CONSUME/gate site across new module boundaries; a structural-only "symbol resolves to its new file" check is **NOT** sufficient to accept the move — the spine tests must be re-run and stay RED-on-removal.
 
 ### 5.3 `render-verification.ts` — data-model-before-logic
 
-**Evidence.** `signing/render-verification.ts` (2850 L) does render/verify block composition for EVM + Tron + Bitcoin + Litecoin + Solana in one file via branch-per-chain dispatch; `solanaActionLabel` alone has 20+ `case` arms (recon, `signing:render-verification-per-chain-god-module`). It also owns non-signing render helpers (`renderMissingSkillWarning`, `renderUpdateAvailableNotice`).
+**Evidence (corrected).** `signing/render-verification.ts` (2850 L, recon @ c1b373a) composes render/verify blocks for EVM + Tron + Bitcoin + Litecoin + Solana. The file's real bloat is **~50 already-separated per-chain named render functions living in one file** — NOT one giant cross-chain switch: a live grep finds exactly **one** `switch` statement (`solanaActionLabel`, recon @ c1b373a L1588), and it is **Solana-internal** (action→label), not cross-chain dispatch. It also owns non-signing render helpers (`renderMissingSkillWarning`, `renderUpdateAvailableNotice`). (The prior draft's "branch-per-chain switch / RenderDescriptor replaces the switch" framing was wrong — there is no big cross-chain switch to flatten.)
 
-**Target.** Replace the branch-per-chain switch with a **per-chain render descriptor** (a data table keyed by action kind, one `RenderDescriptor` type per chain) — make the chain/action a lookup, not a conditional chain. Move the non-signing render helpers out to a render-utilities module.
+**Target.** GROUP the ~50 per-chain render functions into **per-chain render modules** (`signing/render/{evm,tron,bitcoin,litecoin,solana}.ts`) behind a thin dispatch, and move the non-signing render helpers out to a render-utilities module. This is a co-location fix (per-chain logic into per-chain files), not a switch-to-table rewrite.
 
-**Falsifiable target.** No branch-per-chain `switch` exceeds `ASSUMED 8` arms (R10); a `RenderDescriptor` type exists per chain; `solanaActionLabel`'s arm count drops to a table lookup. Check: grep `case ` density per switch.
+**Falsifiable target (structural).** Per-chain render logic lives in a per-chain module, not one 2850-L file; a structural test asserts each per-chain render entry point resolves to its chain module. NOT gated on a switch-arm count.
 
 ### 5.4 `types/index.ts` — split by domain
 
 **Evidence.** `types/index.ts` (1871 L, 59 exports, no internal boundary) holds chain consts, per-protocol position shapes, security shapes, per-chain portfolio slices, per-chain UnsignedTx shapes, paired-device entries, and `UserConfig` — imported everywhere (recon, `infra:types-god-file`).
 
-**Target.** Split by domain: `types/chains.ts` (SupportedChain/CHAIN_IDS), `types/positions.ts`, `types/tx.ts` (per-chain UnsignedTx), `types/devices.ts` (paired-device entries), `types/config.ts` (UserConfig). **Falsifiable target:** no single `types/*` file exceeds `ASSUMED 20` exports or `ASSUMED 600` lines (R11).
+**Target.** Split by domain: `types/chains.ts` (SupportedChain/CHAIN_IDS), `types/positions.ts`, `types/tx.ts` (per-chain UnsignedTx), `types/devices.ts` (paired-device entries), `types/config.ts` (UserConfig). **Falsifiable target (structural).** Types split by named domain — chain consts, position shapes, tx shapes, device entries, config each own a file; a structural test asserts `types/index.ts` (if kept) is a re-export barrel with no domain type defined inline. NOT gated on an export or line count (the recon 59 exports / 1871 L is evidence of the bloat, not the gate).
 
 ### 5.5 min-out slippage math — one shared helper
 
-**Evidence (verified).** The exact-out floor formula `(expected * BigInt(10000 - bps)) / 10000n` is copy-pasted at **4 sites**: `curve/actions.ts` L134 and L366, `swap/index.ts` L635, `uniswap-swap/index.ts` L137. The exact-in ceiling variant `(quoted * (10_000 + bps) + 9_999n) / 10_000n` is duplicated at `uniswap-swap/index.ts` L142 and `swap/index.ts` L967. This copy-paste is the recurrence surface for the #685-class priority-fee/slippage arithmetic bug.
+**Evidence (verified, labels corrected).** Two slippage formulas are copy-pasted across the swap modules. The **exact-IN min-out floor** `(quotedOut * BigInt(10000 - bps)) / 10000n` — named `applySlippageExactIn` in live code (`uniswap-swap/index.ts`, recon @ c1b373a L136-138) — recurs at `curve/actions.ts` L134 and L366, `swap/index.ts` L635, `uniswap-swap/index.ts` L137. The **exact-OUT max-in ceiling** `(quotedIn * (10_000 + bps) + 9_999n) / 10_000n` — named `applySlippageExactOut` (`uniswap-swap/index.ts` L140-143) — recurs at `uniswap-swap/index.ts` L142 and `swap/index.ts` L967. (The prior draft had these two labels inverted — it called the first the "exact-out floor" and the second the "exact-in ceiling"; live code names them the opposite way.) This copy-paste is the recurrence surface for the #685-class priority-fee/slippage arithmetic bug.
 
 **Target.** One shared helper — `modules/shared/slippage.ts` exporting `applyMinOut(expected, bps)` and `applyMaxIn(quoted, bps)`. **Falsifiable target:** exactly one implementation of each formula; `grep -rn "10000 - \|10_000 - \|10_000 + " src/modules/{swap,uniswap-swap,curve}` finds only the shared helper, no sibling copy.
 
-### 5.6 Naming collisions (docs-drift, not merges)
+### 5.6 Naming collisions (docs-drift — tracked in §8, not an architecture task)
 
-Three same-basename directory pairs are NOT duplication — record so DEV does not merge them: `src/shared` (server-wide generic infra) vs `src/modules/shared` (module business helpers); `src/security` (pre-sign GATE infra) vs `src/modules/security` (read-only research tools); `src/diagnostics` (dev/CI self-checks) vs `src/modules/diagnostics` (registered MCP tools). **Target:** rename the module-scoped side (e.g. `modules/shared` → `modules/_common`) OR document the split in a header comment. Falsifiable: each pair carries a one-line "not-a-duplicate-of" header, or the rename lands.
+Three same-basename directory pairs are NOT duplication — distinct layers: `src/shared` (server-wide infra) vs `src/modules/shared` (module business helpers); `src/security` (pre-sign GATE infra) vs `src/modules/security` (read-only research tools); `src/diagnostics` (dev/CI self-checks) vs `src/modules/diagnostics` (registered MCP tools). The fix (rename the module-scoped side or add a "not-a-duplicate-of" header) is comment-linting below §5's altitude; tracked as a docs-drift row in §8, not carried as a §5 architecture unit.
 
 ---
 
@@ -245,9 +260,11 @@ Three same-basename directory pairs are NOT duplication — record so DEV does n
 
 **Annotation coverage is already 100%** (189/189; the 191 raw `registerTool(` occurrences = 189 real `registerTool(server,` calls + the wrapper `function registerTool` + the inner `server.registerTool`). **Do NOT restate CLAUDE.md's stale "zero coverage" claim** — that is a known-stale ref. Keep the 100%-annotation invariant: **exit criterion** — `grep -c "registerTool(server," == grep -c "annotations:"` in `src/index.ts`.
 
-**Product decision (→ ASSUMED + PROD ask, R7/R8).** Should a fresh install default to a curated CORE tool set rather than all 189? A first-run agent pays the full ~227 KB schema bill on every turn regardless of which chains the user holds. **Target:** default-config tool count ≤ `ASSUMED 64` (R7), host-visible schema text ≤ `ASSUMED 96 KB` (R8) — e.g. a CORE family (EVM + reads + send pipeline) with other families/protocols opt-in via the existing env axes. This is PROD's call, not an engineering default; routed in §2.
+**Product decision (→ PROD ask, R7/R8 — no doc-asserted number).** The PROBLEM: a default, unconfigured install registers all ~189 tools every turn (measured ~227 KB schema text, recon @ c1b373a), regardless of which chains the user holds. The LEVER already exists: `VAULTPILOT_CHAIN_FAMILIES` / `VAULTPILOT_PROTOCOLS` (`config/scope.ts`, default `'all'`) already gate registration via `isToolEnabled`. The DECISION — "should a fresh install default to a curated CORE set (e.g. EVM + reads + send pipeline), other families opt-in?" — is **PROD's call**, routed as the R7/R8 intake ask in §2. This doc does NOT assert a ≤64-tool or ≤96 KB target; PROD sets the budget if a curated default is adopted.
 
-**Falsifiable target.** `scripts/bench-tools.mjs` (already spawns `dist/index.js` over stdio and measures the static tool surface, issue #637) is extended to assert: with no env config, registered tool count ≤ R7 and total schema text ≤ R8. The check goes RED if a future default re-inflates the surface.
+**Primary falsifiable target (fund-safety — guard/prepare co-scoping).** A guard/preview tool and the mutation tools it gates MUST be registered together in EVERY scope config. `preview_send` (scope `{family: evm}`, `config/scope.ts` L155) and `preview_solana_send` (`{family: solana}`, L185) are the pre-sign safety gates for the EVM/Solana `prepare_*` + `send_transaction` tools; a default-scope reduction that drops a guard/preview tool while still registering that family's `prepare_*`/`send_transaction` is a **FUND-SAFETY REGRESSION** — the mutation path loads without its safety gate. **Exit criterion:** a test asserting that for every scope config, if any `prepare_*`/`send_transaction` for a family is registered, that family's `preview_*`/guard tools are too — RED if a scoping change de-couples them. This gates any §6 default-scope change and is PRIMARY over the count/size bench below.
+
+**Secondary target (context-cost bench).** `scripts/bench-tools.mjs` (already spawns `dist/index.js` over stdio and measures the static tool surface, issue #637) records the default-config tool count and total schema text so a regression is visible; if PROD adopts a curated default (R7/R8), the bench asserts against PROD's budget. Secondary to the co-scoping invariant above.
 
 ---
 
@@ -267,31 +284,37 @@ Recon confirmed these are load-bearing or deliberate. DEV must not collapse them
 
 ---
 
-## 8. Convergence backlog index (issue numbers TBD — ARCH fills after filing)
+## 8. Convergence backlog index (thin pointer — issue numbers TBD, ARCH files)
 
-One row per convergence unit → doc section it implements → target file(s). Grouped. Robustness/bug rows are independent of the simplification rows and can land first.
+Pointer index ONLY: one row per convergence unit → the doc section that OWNS its exit criterion → target file(s). Exit criteria live once, in their section (§2–§6), and are **not restated here** — read the section for the falsifier. Robustness/bug rows are independent of the simplification rows and can land first.
 
-| Group | Unit | Implements | Target file(s) | Issue |
+| Group | Unit | Owning section | Target file(s) | Issue |
 |---|---|---|---|---|
-| Robustness/bugs | Solana `Connection` timeout/AbortSignal | INV-T1 (R6) | `modules/solana/rpc.ts` | TBD |
-| Robustness/bugs | 4byte.directory via `fetchWithTimeout` | INV-T1 (R6) | `data/apis/fourbyte.ts`, `signing/verify-decode.ts` | TBD |
-| Robustness/bugs | Redact API keys from error responses | INV-T2 | `shared/error-message.ts` | TBD |
-| Robustness/bugs | Oracle-poller in-flight guard + timed calls | INV-T4 (R13) | `modules/incidents/oracle-poller.ts` | TBD |
-| Robustness/bugs | `get_daily_briefing` composite fan-out cap | INV-T3 (R5) | `modules/digest/index.ts` | TBD |
-| Robustness/bugs | `resolveSelectors` bound + timeout | INV-T3 (R5) | `modules/history/decode.ts` | TBD |
-| Robustness/bugs | `TTLCache` key-count/eviction bound | INV-T4 | `data/cache.ts` | TBD |
-| Robustness/bugs | LTC legacy-fallback: replace SDK error string-match | §5.1 | `signing/ltc-usb-signer.ts` | TBD |
-| Robustness/bugs | `permissions`/`verification` RPC-vs-negative catch split | INV-T2 | `modules/security/{permissions,verification}.ts` | TBD |
-| Robustness/bugs | `hookTimeout` raise to match `testTimeout` (issue #691) | §5.2 test cost | `vitest.config.ts` | #691 |
-| Robustness/bugs | viem `http()` explicit timeout | INV-T1 | `data/rpc.ts` | TBD |
-| Robustness/bugs | Demo duplicate-handle leak | §3.6 | `src/index.ts` | TBD |
-| Simplifications | UTXO Esplora client unification | §5.1 | `modules/utxo/esplora-client.ts` | TBD |
-| Simplifications | `execution/index.ts` decomposition | §5.2 | `modules/{pairing,evm-prepare,solana,tron}/…`, `signing/send-pipeline.ts` | TBD |
-| Simplifications | `render-verification.ts` → render descriptors | §5.3 | `signing/render-verification.ts` | TBD |
-| Simplifications | `types/index.ts` domain split | §5.4 | `types/{chains,positions,tx,devices,config}.ts` | TBD |
-| Simplifications | min-out shared helper | §5.5 | `modules/shared/slippage.ts` | TBD |
-| Simplifications | module-scoped `shared`/`security`/`diagnostics` rename | §5.6 | `modules/_common/…` | TBD |
-| Simplifications | Default CORE tool-scope + bench assertion | §6 (R7/R8) | `config/scope.ts`, `scripts/bench-tools.mjs` | TBD |
-| Docs-drift | Org/path/annotation-coverage stale refs | (out of this doc) | `CLAUDE.md`, README, AGENTS, INSTALL, SECURITY, ROADMAP, `glama.json`, `server.json` | TBD |
-| Docs-drift | RECON_* legacy env aliases retirement | (out of this doc) | `config/chains.ts` | TBD |
-| Product intake | R1–R13 spec-value asks (§2 table) | §2 | (SPEC.md — to be created) | TBD |
+| Security | `transferFrom` recipient classifier fix + `to==wallet` test | §3.2 | `security/custom-call-classifier.ts`, `modules/custom-call/actions.ts` | TBD (ARCH files) |
+| Security | tx-store deep `Object.freeze` + mutation regression test | §3.3 | `signing/tx-store.ts` | TBD (ARCH files) |
+| Robustness/bugs | Lint rule: ban bare `fetch`/`globalThis.fetch` outside `data/http.ts` | §4 INV-T1 | eslint config, `data/http.ts` | TBD (ARCH files) |
+| Robustness/bugs | Solana `Connection` timeout/AbortSignal | §4 INV-T1 (R6) | `modules/solana/rpc.ts` | TBD (ARCH files) |
+| Robustness/bugs | Solana connection cache-swap concurrency guard | §4 INV-T1 | `modules/solana/rpc.ts` | TBD (ARCH files) |
+| Robustness/bugs | 4byte.directory via `fetchWithTimeout` | §4 INV-T1 (R6) | `data/apis/fourbyte.ts`, `signing/verify-decode.ts` | TBD (ARCH files) |
+| Robustness/bugs | viem `http()` explicit per-attempt timeout | §4 INV-T1 | `data/rpc.ts` | TBD (ARCH files) |
+| Robustness/bugs | Redact API keys from error responses | §4 INV-T2 | `shared/error-message.ts` | TBD (ARCH files) |
+| Robustness/bugs | Oracle-poller in-flight guard + timed calls | §4 INV-T4 (R13) | `modules/incidents/oracle-poller.ts` | TBD (ARCH files) |
+| Robustness/bugs | `get_daily_briefing` composite fan-out cap | §4 INV-T3 (R5) | `modules/digest/index.ts` | TBD (ARCH files) |
+| Robustness/bugs | `resolveSelectors` bound + timeout | §4 INV-T3 (R5) | `modules/history/decode.ts` | TBD (ARCH files) |
+| Robustness/bugs | `TTLCache` key-count/eviction bound | §4 INV-T4 | `data/cache.ts` | TBD (ARCH files) |
+| Robustness/bugs | LTC legacy-fallback: replace SDK error string-match | §5.1 | `signing/ltc-usb-signer.ts` | TBD (ARCH files) |
+| Robustness/bugs | `permissions`/`verification` RPC-vs-negative catch split | §4 INV-T2 | `modules/security/{permissions,verification}.ts` | TBD (ARCH files) |
+| Robustness/bugs | `hookTimeout` raise to match `testTimeout` | §5.2 test cost | `vitest.config.ts` | #691 |
+| Robustness/bugs | Demo duplicate-handle leak | §3.6 | `src/index.ts` | TBD (ARCH files) |
+| Measurement | p95 latency bench (R1/R2/R3 UNMEASURED) | §2 | `scripts/bench-tools.mjs` or new bench-latency script | TBD (ARCH files) |
+| Fund-safety | Guard/prepare co-scoping test | §6 | `config/scope.ts`, scope test | TBD (ARCH files) |
+| Simplifications | UTXO Esplora client unification (preserve BTC `getTx`) | §5.1 | `modules/utxo/esplora-client.ts` | TBD (ARCH files) |
+| Simplifications | `execution/index.ts` decomposition (7 seams, spine-gated) | §5.2 | `modules/{pairing,evm-prepare,solana,tron}/…`, `signing/{send-pipeline,status-dispatch,verification-artifact}.ts` | TBD (ARCH files) |
+| Simplifications | `render-verification.ts` → per-chain render modules | §5.3 | `signing/render/{evm,tron,bitcoin,litecoin,solana}.ts` | TBD (ARCH files) |
+| Simplifications | `types/index.ts` domain split | §5.4 | `types/{chains,positions,tx,devices,config}.ts` | TBD (ARCH files) |
+| Simplifications | min-out / max-in shared helper | §5.5 | `modules/shared/slippage.ts` | TBD (ARCH files) |
+| Simplifications | Default CORE tool-scope (if PROD adopts) | §6 (R7/R8) | `config/scope.ts`, `scripts/bench-tools.mjs` | TBD (ARCH files) |
+| Docs-drift | module-scoped `shared`/`security`/`diagnostics` rename or header | §5.6 | `modules/_common/…` | TBD (ARCH files) |
+| Docs-drift | Org/path/annotation-coverage stale refs | (out of this doc) | `CLAUDE.md`, README, AGENTS, INSTALL, SECURITY, ROADMAP, `glama.json`, `server.json` | TBD (ARCH files) |
+| Docs-drift | RECON_* legacy env aliases retirement | (out of this doc) | `config/chains.ts` | TBD (ARCH files) |
+| Product intake | R1–R13 spec-value asks (§2 table) | §2 | (SPEC.md — to be created) | TBD (ARCH files) |
