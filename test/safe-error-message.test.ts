@@ -129,4 +129,13 @@ describe("safeErrorMessage — issue #695 provider-API-key redaction", () => {
     const out = safeErrorMessage(new Error("Insufficient funds for gas * price + value"));
     expect(out).toBe("Insufficient funds for gas * price + value");
   });
+
+  it("does not clobber a legitimate short /v2/ or /v3/ version path (guards against redacting real output)", () => {
+    // `/v2/eth` / `/v3/quote` are real, non-secret API version-path words —
+    // the `{8,}` length floor on the path-segment regex exists precisely so
+    // these survive. If the floor is ever dropped, this string goes RED.
+    const msg =
+      "Upstream 502 from route /v2/eth and quote endpoint /v3/quote — retry later";
+    expect(safeErrorMessage(new Error(msg))).toBe(msg);
+  });
 });
