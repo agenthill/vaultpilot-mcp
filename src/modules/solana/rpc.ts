@@ -40,11 +40,29 @@ let cachedConnectionUrl: string | undefined;
  * and a centralized hook is the only sustainable choice. Same pattern
  * the EVM transport-wrapper uses in src/data/rpc.ts.
  */
+/**
+ * Issue #693: this shim previously called `fetch` with no timeout at all —
+ * a stalled/malicious upstream that accepts the TCP connection but never
+ * sends a body could stall the MCP process indefinitely (undici default
+ * ~300s). Wraps with the same AbortController + configurable-timeout
+ * pattern as `data/http.ts`'s `fetchWithTimeout` (default 10s) so a dead
+ * Solana endpoint fails fast with a catchable error instead.
+ */
+const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
+
 async function fetchWithRateLimitDetect(
   input: Parameters<typeof fetch>[0],
   init?: Parameters<typeof fetch>[1],
+  timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
-  const res = await fetch(input, init);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   // HTTP-status side: api.mainnet-beta.solana.com returns 429 most often,
   // but occasionally surfaces 410 (Gone — restricted method on the public
   // endpoint) and 503 (overloaded) for the same throttling reason. Issue
@@ -103,8 +121,9 @@ async function fetchWithRateLimitDetect(
 export function _fetchWithRateLimitDetectForTests(
   input: Parameters<typeof fetch>[0],
   init?: Parameters<typeof fetch>[1],
+  timeoutMs?: number,
 ): Promise<Response> {
-  return fetchWithRateLimitDetect(input, init);
+  return fetchWithRateLimitDetect(input, init, timeoutMs);
 }
 
 export function getSolanaConnection(): Connection {
