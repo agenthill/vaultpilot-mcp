@@ -129,14 +129,25 @@ export async function buildCustomCall(p: BuildCustomCallParams): Promise<Unsigne
   // there's no legitimate flow where the user wants to pull their own
   // tokens through allowance-spending machinery (use prepare_token_send
   // instead, which doesn't require an approval).
+  const isTransferFromCall = data.toLowerCase().startsWith("0x23b872dd");
   const transferFromSelfAsFrom =
-    data.toLowerCase().startsWith("0x23b872dd") &&
+    isTransferFromCall &&
     p.args.length >= 1 &&
     String(p.args[0] ?? "").toLowerCase() === p.wallet.toLowerCase();
+  // Issue #711 — the ack override is legitimate only when the pulled
+  // tokens land back at the wallet, i.e. the recipient (`args[1]`, the
+  // `to` param) equals the wallet. Recipient goes unchecked (missing arg)
+  // → deny-by-default. Non-transferFrom selectors don't gate on this, so
+  // report `true` for them (the flag is ignored unless isTransferFrom).
+  const transferFromRecipientIsWallet =
+    !isTransferFromCall ||
+    (p.args.length >= 2 &&
+      String(p.args[1] ?? "").toLowerCase() === p.wallet.toLowerCase());
   const classifierVerdict = applyCustomCallClassifier(
     data,
     p.acknowledgeKnownExfilPattern,
     transferFromSelfAsFrom,
+    transferFromRecipientIsWallet,
   );
 
   // Stringify args for the decoded preview. Caller-supplied shapes are
