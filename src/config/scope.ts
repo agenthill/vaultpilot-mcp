@@ -193,6 +193,7 @@ export function getToolScope(name: string): { family?: ChainFamily; protocol?: P
   if (
     name.startsWith("prepare_tron_") ||
     name.startsWith("get_tron_") ||
+    name.startsWith("prepare_sunswap_") ||
     name === "list_tron_witnesses" ||
     name === "pair_ledger_tron"
   )
