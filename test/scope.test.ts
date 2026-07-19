@@ -80,6 +80,7 @@ describe("getToolScope — prefix-derived mapping", () => {
     ["get_tron_staking", "tron"],
     ["list_tron_witnesses", "tron"],
     ["pair_ledger_tron", "tron"],
+    ["prepare_sunswap_swap", "tron"],
     // BTC
     ["prepare_btc_send", "btc"],
     ["combine_btc_psbts", "btc"],
@@ -172,6 +173,7 @@ describe("isToolEnabled — env-var integration", () => {
     expect(isToolEnabled("prepare_btc_send")).toBe(false);
     expect(isToolEnabled("prepare_litecoin_native_send")).toBe(false);
     expect(isToolEnabled("prepare_marginfi_supply")).toBe(false);
+    expect(isToolEnabled("prepare_sunswap_swap")).toBe(false); // #726 — TRON DEX swap must gate w/ family
   });
 
   it("VAULTPILOT_PROTOCOLS=aave,lido,uniswap drops other DeFi protocols, keeps family-level EVM tools", async () => {
