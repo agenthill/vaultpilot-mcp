@@ -43,6 +43,25 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: "Guard: no focused (.only) tests"
+        # Matches it/test/describe .only in any chain position (.only, .only.each,
+        # .concurrent.only, .only.concurrent). Line-based grep won't catch a chain
+        # split across newlines — migrate to eslint-plugin-vitest no-only-tests if
+        # #714 lands an ESLint config.
+        run: |
+          set +e
+          matches=$(grep -rEn '\b(it|describe|test)(\.\w+)*\.only\b' test/)
+          rc=$?
+          set -e
+          case "$rc" in
+            0) printf '%s\n' "$matches"
+               echo "::error::Focused (.only) test(s) found in test/ — remove before merging."
+               exit 1 ;;
+            1) : ;;   # no match — clean
+            *) echo "::error::.only guard: grep exited $rc (error) — failing closed."
+               exit 1 ;;
+          esac
+
   # Note: a `binary-smoke-test` job lived here that built the linux-x64
   # pkg-bundled binary on every PR and ran scripts/smoke-test-binary.mjs
   # against it. It was the per-PR catch for pkg-bundle startup
