@@ -81,6 +81,11 @@ export function kickoffUpdateCheck(): void {
 
 async function runCheck(): Promise<void> {
   try {
+    // #714: reviewed exception — the `f(...)` call below threads its own
+    // AbortController-backed signal (INV-T1's thread-an-AbortSignal
+    // alternative); ARCHITECTURE.md §4 INV-T1 names this aliasing test seam
+    // by file, must not be flagged.
+    // eslint-disable-next-line no-restricted-syntax
     const f = fetchOverride ?? globalThis.fetch;
     if (typeof f !== "function") return;
     const ctrl = new AbortController();

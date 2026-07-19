@@ -232,6 +232,10 @@ async function postToEndpoint(url: string, payload: IssuePayload) {
   const timeout = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
   let res: Response;
   try {
+    // #714: reviewed exception — already threads the AbortController-backed
+    // `controller.signal` above (INV-T1's thread-an-AbortSignal alternative),
+    // matching data/http.ts's fetchWithTimeout pattern.
+    // eslint-disable-next-line no-restricted-globals
     res = await fetch(url, {
       method: "POST",
       headers: {

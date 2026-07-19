@@ -325,6 +325,11 @@ async function validateSolanaRpcUrl(url: string): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5_000);
   try {
+    // #714: reviewed exception — already threads the AbortController-backed
+    // `controller.signal` above (INV-T1's thread-an-AbortSignal alternative);
+    // this is the setup CLI (not a tool-reachable path), matching
+    // data/http.ts's fetchWithTimeout pattern.
+    // eslint-disable-next-line no-restricted-globals
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
