@@ -7,6 +7,7 @@
  * regression guard.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { getToolScope } from "../src/config/scope.js";
 
 describe("getToolScope — prefix-derived mapping", () => {
   beforeEach(() => vi.resetModules());
@@ -225,4 +226,57 @@ describe("isToolEnabled — env-var integration", () => {
     const { getEnabledProtocols } = await import("../src/config/scope.js");
     expect(getEnabledProtocols()).toBeNull();
   });
+});
+
+/**
+ * #712 — fund-safety regression guard (ARCHITECTURE.md §6 PRIMARY exit
+ * criterion). `send_transaction` is CORE (untagged, always-on — see
+ * `getToolScope`'s trailing `return {}`), so it never drives this check;
+ * the real risk is a family's `preview_*` guard getting de-coupled from
+ * that same family's `prepare_*` tools.
+ *
+ * Asserts the scope TAG directly, not `isToolEnabled`'s boolean. A boolean
+ * check can't go red for this regression: `isToolEnabled` only gates a tool
+ * that carries a family tag, so a guard tool silently demoted to core
+ * (`getToolScope` falls through to the trailing `return {}`) reads as
+ * "always enabled" and the "prepare enabled => guard enabled" implication
+ * stays trivially true no matter what scope config is stubbed.
+ *
+ * Comparing the guard's tag against each representative prepare tool's tag
+ * (rather than hardcoding `{family: "evm"}` in isolation) is what makes this
+ * non-redundant with the pre-existing per-tool table above (lines ~51, 71):
+ * it encodes the co-scoping RELATIONSHIP, so it also catches the guard and
+ * its prepare siblings drifting to two different family tags, not just the
+ * guard falling to `{}`.
+ */
+describe("co-scoping guard — preview tool's scope tag tracks its family's prepare tools (#712)", () => {
+  const FAMILY_GUARD_TOOL = {
+    evm: "preview_send",
+    solana: "preview_solana_send",
+  } as const;
+
+  // Representative prepare_* tools per family — a mix of family-only and
+  // per-protocol entries so both getToolScope() branches are exercised.
+  const FAMILY_PREPARE_TOOLS: Record<keyof typeof FAMILY_GUARD_TOOL, string[]> = {
+    evm: ["prepare_native_send", "prepare_token_send", "prepare_aave_supply"],
+    solana: ["prepare_solana_native_send", "prepare_marginfi_supply"],
+  };
+
+  it.each(Object.entries(FAMILY_GUARD_TOOL))(
+    "%s: guard tool %s carries the same family tag as its family's prepare tools",
+    (family, guardTool) => {
+      const guardScope = getToolScope(guardTool);
+      const prepareTools = FAMILY_PREPARE_TOOLS[family as keyof typeof FAMILY_GUARD_TOOL];
+      for (const prepareTool of prepareTools) {
+        const prepareScope = getToolScope(prepareTool);
+        // Co-scoping invariant: if the guard tool ever falls through
+        // getToolScope's rule list to the trailing core `return {}`,
+        // guardScope.family becomes `undefined` while prepareScope.family
+        // stays the tagged family — this line goes RED right there.
+        expect(guardScope.family).toBe(prepareScope.family);
+      }
+      // Direct tag pin — no protocol tag, no unexpected core fall-through.
+      expect(guardScope).toEqual({ family });
+    },
+  );
 });
