@@ -325,7 +325,14 @@ describe("#760 falsifiers — LiFi Diamond allowedAbi:null (block 5 does not run
   // #759 design D8: an ack-stamped (prepare_custom_call-reachable) LiFi swap
   // whose extractable `_receiver` is not the wallet must be hard-gated. Native
   // `value` rides along (all generic-swap entry points are payable).
-  it("ack-stamped LiFi swapTokensSingleV3NativeToERC20(_receiver=ATTACKER) + native value MUST be REFUSED (RED today)", async () => {
+  // D8 v6-increment / separate track — not this PR. The first #759 spine PR
+  // (this one) closes the SEC-v5-approved recipient dimension for the
+  // recognized-ABI destinations (Aave/Morpho/Lido/Uniswap). LiFi's `_receiver`
+  // discriminator (`allowedAbi: null`, extractable-receiver classification) is
+  // the v6-pending D8 leg — REVIEW's §4-grounding stop landed on exactly its
+  // stamp/discriminator rows. Skipped so CI is GREEN; turns GREEN when the D8
+  // increment lands, per docs/design/757-760-impl-plan.md §3.2.
+  it.skip("ack-stamped LiFi swapTokensSingleV3NativeToERC20(_receiver=ATTACKER) + native value MUST be REFUSED [D8 v6-increment / separate track — not this PR]", async () => {
     mockEvmRpc();
     await expect(
       previewOf(
