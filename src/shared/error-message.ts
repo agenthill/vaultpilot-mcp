@@ -132,9 +132,14 @@ export function redactSecrets(str: string): string {
  * so a key on a CUSTOM / unlisted provider (an Ankr path token, a dRPC
  * `?dkey=`, a self-hosted endpoint) still leaks. The durable complement is to
  * scrub the user's OWN configured secret VALUES by exact substring match:
- * every configured provider is covered (listed or not) with structurally zero
- * over-redaction, because only strings the user actually configured are used
- * as needles.
+ * every configured provider is covered (listed or not), and over-redaction is
+ * structurally zero for URL-typed values (credential-segment-only extraction
+ * means a public base URL contributes no needle, below). It is NOT literally
+ * zero for pure-secret values: an atypically-short (8-15 char) HEX secret can
+ * collide as a substring of unrelated hex output (a tx hash, an address) and
+ * over-redact it — the safe direction, never a leak, at ~1e-8 probability in
+ * practice since no enumerated config field is naturally short-hex (realistic
+ * only for a user-chosen weak hex RPC password). See Residuals below.
  *
  * This COMPOSES WITH the shape patterns — it does not replace them. The shape
  * patterns still cover keys that surface BEFORE config is loaded, and keys in
@@ -190,8 +195,14 @@ export function redactSecrets(str: string): string {
  * key in a clipped error) will not exact-match — prefix matching would fix it at
  * an over-redaction cost not worth paying; a secret the MCP never persisted to
  * config is covered only by the shape patterns (i.e. only if its host is
- * listed); and the redaction-SEAM completeness gap (the transform is applied at
- * a hand-maintained set of return sites, not by construction) is the structural
+ * listed); an atypically-short (8-15 char) HEX pure-secret can collide as a
+ * substring of unrelated hex output (a tx hash, an address) and over-redact it
+ * — safe direction, never a leak, ~1e-8 in practice since no enumerated config
+ * field is naturally short-hex (realistic only for a user-chosen weak hex RPC
+ * password); excluding short-hex needles is NOT the fix — it would under-redact
+ * a genuine short-hex secret, the worse failure, so it is left as-is; and the
+ * redaction-SEAM completeness gap (the transform is applied at a
+ * hand-maintained set of return sites, not by construction) is the structural
  * item routed to the ARCH substrate review — out of scope for this
  * redaction-transform PR.
  */
@@ -262,6 +273,9 @@ function looksLikeHttpUrl(v: string | undefined): v is string {
  * substring). `dkey`, `api-key`, `apikey`, `access_token`, `token`, `key` all
  * match; `network`, `chain`, `id` do not.
  */
+// residual: matches ANY param name containing key/token/secret/auth/pass, so a
+// public ≥8-char value under such a name would be needled (over-redaction, safe
+// direction, negligible — narrowing risks missing a real credential instead).
 const CRED_QUERY_NAME = /(?:key|token|secret|auth|pass)/i;
 
 /**
@@ -271,6 +285,9 @@ const CRED_QUERY_NAME = /(?:key|token|secret|auth|pass)/i;
  * `/mainnet-beta`, `/positions` from being needled while catching a 32-char
  * Ankr path token.
  */
+// residual: needles any ≥8-char path segment containing a digit, so a non-secret
+// routing word like `mainnet1` also matches (over-redaction, safe direction,
+// negligible — narrowing risks missing a real short digit-bearing path token).
 function isCredentialPathToken(seg: string): boolean {
   if (seg.length < MIN_SECRET_NEEDLE_LEN) return false;
   return /\d/.test(seg) || seg.length >= 24;
