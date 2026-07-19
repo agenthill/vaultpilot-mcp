@@ -72,6 +72,56 @@ export function safeErrorMessage(error: unknown): string {
   return redactSecrets(safeErrorMessageRaw(error));
 }
 
+/**
+ * Success-path response redactor (issue #707, follow-up to #695/#703).
+ *
+ * #695/#703 closed the ERROR path — every string `safeErrorMessage` returns
+ * is redacted before it reaches an MCP tool-error response. But on the
+ * SUCCESS path, module adapters embed a CAUGHT upstream `err.message` in a
+ * `reason`/`note` field (`compare_yields` → `aave.ts`/`compound.ts`/
+ * `marginfi.ts`; the incidents chain scans → `chain-solana.ts`/`chain-tron.ts`/
+ * `chain-utxo.ts`; `execution/index.ts` RPC helpers; `simulation/index.ts`
+ * `revertReason`) and that object is JSON-serialized into a SUCCESS content
+ * block WITHOUT passing through `safeErrorMessage` — leaking the keyed RPC URL
+ * (Infura `/v3/<key>`, Alchemy `/v2/<key>`, Helius `?api-key=<key>`) verbatim.
+ *
+ * This runs the SAME `redactSecrets` transform over every text content block
+ * of the response it is APPLIED to — closing the leak for every provider and
+ * every `reason`/`note` field in that response, current or future, rather than
+ * per-adapter (per ARCHITECTURE §4 INV-T2, and the #707 design note).
+ *
+ * It does NOT cover a tool "by construction" on its own: it only redacts the
+ * boundaries it is wired into, so it must be applied at EVERY MCP
+ * response-serialization boundary. There is no single choke point — a handler
+ * that serializes its own `{ content }` return without routing through a
+ * wrapped boundary is uncovered (that was the #707-rework gap: the three
+ * directly-registered preview/send handlers below). The full set of wired
+ * boundaries: `handler()`'s success return, `broadcastSimulationDispatch`'s
+ * envelope, and the `preview_send` / `preview_solana_send` / `send_transaction`
+ * handler success returns (`src/index.ts`).
+ *
+ * Mutates in place; every caller builds a fresh `content` array per request,
+ * so the mutation is local. Idempotent — re-redacting an already-safe block
+ * is a no-op (`***` matches no key pattern), so wrapping a clean preview/send
+ * payload (tx hashes, addresses, amounts) leaves it untouched.
+ */
+export function redactResponseContent<T extends { content: unknown[] }>(
+  response: T,
+): T {
+  for (const block of response.content) {
+    if (
+      block !== null &&
+      typeof block === "object" &&
+      "text" in block &&
+      typeof (block as { text: unknown }).text === "string"
+    ) {
+      const b = block as { text: string };
+      b.text = redactSecrets(b.text);
+    }
+  }
+  return response;
+}
+
 function safeErrorMessageRaw(error: unknown): string {
   if (typeof error === "string") {
     return error.length > 0 ? error : "Unknown error (empty string thrown)";

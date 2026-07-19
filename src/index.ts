@@ -562,7 +562,7 @@ import type { SendTransactionArgs } from "./modules/execution/schemas.js";
 
 import { readUserConfig } from "./config/user-config.js";
 import { isToolEnabled } from "./config/scope.js";
-import { safeErrorMessage } from "./shared/error-message.js";
+import { safeErrorMessage, redactResponseContent } from "./shared/error-message.js";
 
 /**
  * URL of the agent-side preflight skill's git repo. Single source of truth
@@ -893,7 +893,7 @@ export async function collectVerificationBlocks(
  * The block lives next to the JSON so machine readers still get the
  * structured data AND the user sees the verification prose verbatim.
  */
-function handler<T, R>(
+export function handler<T, R>(
   fn: (args: T) => Promise<R> | R,
   opts?: { toolName?: string },
 ) {
@@ -1003,7 +1003,14 @@ function handler<T, R>(
           content.push({ type: "text", text: nudge });
         }
       }
-      return { content };
+      // #707: SUCCESS-path redaction choke point. Module adapters embed a
+      // caught upstream `err.message` in a `reason`/`note` field on a success
+      // return (compare_yields, the incidents chain scans, execution RPC
+      // helpers, simulation `revertReason`) that is JSON-serialized above
+      // WITHOUT passing through `safeErrorMessage` — this scrubs the keyed
+      // provider URL from every text block before it leaves the boundary. The
+      // error path below already redacts via `safeErrorMessage`.
+      return redactResponseContent({ content });
     } catch (error) {
       // Issue #326: the legacy `error instanceof Error ? error.message :
       // String(error)` pattern produced `Error: [object Object]` when the
@@ -1179,7 +1186,7 @@ function registerTool(
  * for symmetry with the dispatcher's signature. The broadcast tool's
  * real implementation has chain-write side effects we must not trigger.
  */
-async function broadcastSimulationDispatch(
+export async function broadcastSimulationDispatch(
   toolName: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   args: any,
@@ -1262,12 +1269,17 @@ async function broadcastSimulationDispatch(
     simulationResult,
     pinnedPreview: null,
   });
-  return {
+  // #707: the envelope serializes `simulationResult` verbatim, so a SUCCESSFUL
+  // simulate returning a keyed-URL `revertReason` leaks through the success
+  // envelope (the catch branch's `reason` is already redacted above). Scrub the
+  // rendered content at this boundary too — `broadcastSimulationDispatch`
+  // bypasses the `handler()` choke point.
+  return redactResponseContent({
     content: [
       { type: "text" as const, text: renderSimulationEnvelopeBlock(envelope) },
       { type: "text" as const, text: JSON.stringify(envelope, bigintReplacer, 2) },
     ],
-  };
+  });
 }
 
 /**
@@ -1412,7 +1424,14 @@ export function previewSendHandler(
           ...(result.clearSignOnly ? { clearSignOnly: true } : {}),
         }),
       });
-      return { content };
+      // #707: SUCCESS-path redaction. `preview_send` is registered directly
+      // (not via the `handler()` wrapper), so it bypasses that choke point's
+      // redaction (L1013). The serialized `result` JSON block can carry a
+      // keyed provider URL embedded upstream (e.g. a simulation note built
+      // from a caught `err.message`); scrub every text block here too. Same
+      // idempotent `redactSecrets` transform — a clean tx `to`/`valueWei`/
+      // `preSignHash`/gas payload passes through untouched.
+      return redactResponseContent({ content });
     } catch (error) {
       // #695: route through safeErrorMessage so a viem transport error that
       // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
@@ -1451,7 +1470,13 @@ export function previewSolanaSendHandler(
       if (demoNotice) content.push({ type: "text", text: demoNotice });
       content.push({ type: "text", text: renderSolanaVerificationBlock(pinned) });
       content.push({ type: "text", text: renderSolanaAgentTaskBlock(pinned) });
-      return { content };
+      // #707: SUCCESS-path redaction. `preview_solana_send` is registered
+      // directly, bypassing the `handler()` choke point (L1013). The
+      // serialized `pinned` tx block can carry a keyed Helius URL
+      // (`?api-key=<key>`) embedded upstream; scrub every text block here too.
+      // Idempotent `redactSecrets` transform — a clean blockhash/from/amount
+      // payload passes through untouched.
+      return redactResponseContent({ content });
     } catch (error) {
       // #695: route through safeErrorMessage so a viem transport error that
       // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
@@ -1518,7 +1543,14 @@ export function sendTransactionHandler(
           ...(result.durableNonce ? { durableNonce: result.durableNonce } : {}),
         }),
       });
-      return { content };
+      // #707: SUCCESS-path redaction. `send_transaction` is registered
+      // directly, bypassing the `handler()` choke point (L1013). The
+      // serialized broadcast `result` block can carry a keyed provider URL
+      // embedded upstream (e.g. a relay/RPC note built from a caught
+      // `err.message`); scrub every text block here too. Idempotent
+      // `redactSecrets` transform — the tx hash / explorer link / chain
+      // payload passes through untouched.
+      return redactResponseContent({ content });
     } catch (error) {
       // #695: route through safeErrorMessage so a viem transport error that
       // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
