@@ -72,6 +72,44 @@ export function safeErrorMessage(error: unknown): string {
   return redactSecrets(safeErrorMessageRaw(error));
 }
 
+/**
+ * Success-path response redactor (issue #707, follow-up to #695/#703).
+ *
+ * #695/#703 closed the ERROR path — every string `safeErrorMessage` returns
+ * is redacted before it reaches an MCP tool-error response. But on the
+ * SUCCESS path, module adapters embed a CAUGHT upstream `err.message` in a
+ * `reason`/`note` field (`compare_yields` → `aave.ts`/`compound.ts`/
+ * `marginfi.ts`; the incidents chain scans → `chain-solana.ts`/`chain-tron.ts`/
+ * `chain-utxo.ts`; `execution/index.ts` RPC helpers; `simulation/index.ts`
+ * `revertReason`) and that object is JSON-serialized into a SUCCESS content
+ * block WITHOUT passing through `safeErrorMessage` — leaking the keyed RPC URL
+ * (Infura `/v3/<key>`, Alchemy `/v2/<key>`, Helius `?api-key=<key>`) verbatim.
+ *
+ * This runs the SAME `redactSecrets` transform over every text content block
+ * at the MCP response boundary, so the leak is closed once — for every
+ * provider, every tool, and every current OR future `reason`/`note` field —
+ * rather than per-adapter (per ARCHITECTURE §4 INV-T2, and the #707 design
+ * note). Mutates in place; every caller builds a fresh `content` array per
+ * request, so the mutation is local. Idempotent — re-redacting an
+ * already-safe error block is a no-op (`***` matches no key pattern).
+ */
+export function redactResponseContent<T extends { content: unknown[] }>(
+  response: T,
+): T {
+  for (const block of response.content) {
+    if (
+      block !== null &&
+      typeof block === "object" &&
+      "text" in block &&
+      typeof (block as { text: unknown }).text === "string"
+    ) {
+      const b = block as { text: string };
+      b.text = redactSecrets(b.text);
+    }
+  }
+  return response;
+}
+
 function safeErrorMessageRaw(error: unknown): string {
   if (typeof error === "string") {
     return error.length > 0 ? error : "Unknown error (empty string thrown)";
