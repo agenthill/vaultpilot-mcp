@@ -482,6 +482,38 @@ describe("importStrategy — strict-shape gate (issue #557)", () => {
       ],
       notes: ["a note"],
     };
-    await expect(importStrategy({ json: valid })).resolves.toBeDefined();
+    const { strategy } = await importStrategy({ json: valid });
+    // Assert every constructed field survives the happy path — a silent
+    // field-drop in validateSharedStrategy is caught here, not masked by a
+    // bare `.toBeDefined()`.
+    expect(strategy.version).toBe(1);
+    expect(strategy.meta.name).toBe("x");
+    expect(strategy.meta.description).toBe("an example");
+    expect(strategy.meta.authorLabel).toBe("alice");
+    expect(strategy.meta.riskProfile).toBe("moderate");
+    expect(strategy.meta.createdIso).toBe("2026-04-26T12:00:00.000Z");
+    expect(strategy.meta.chains).toEqual(["ethereum"]);
+    expect(strategy.positions).toHaveLength(2);
+    const aave = strategy.positions.find((p) => p.protocol === "aave-v3")!;
+    expect(aave).toMatchObject({
+      protocol: "aave-v3",
+      chain: "ethereum",
+      kind: "supply",
+      asset: "USDC",
+      pctOfTotal: 75,
+      healthFactor: 2.1,
+      apr: 0.04,
+    });
+    const uni = strategy.positions.find((p) => p.protocol === "uniswap-v3")!;
+    expect(uni).toMatchObject({
+      protocol: "uniswap-v3",
+      chain: "ethereum",
+      kind: "lp",
+      asset: "ETH/USDC",
+      pctOfTotal: 25,
+      feeTier: 3000,
+      inRange: true,
+    });
+    expect(strategy.notes).toEqual(["a note"]);
   });
 });
