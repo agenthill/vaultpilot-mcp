@@ -341,7 +341,16 @@ describe("#760 falsifiers — LiFi Diamond allowedAbi:null (block 5 does not run
     ).rejects.toThrow(REFUSAL);
   });
 
-  it("over-block control — same LiFi call with _receiver=wallet MUST still PASS (GREEN now and after fix)", async () => {
+  // Reconciled after #786/#789 (LiFi Diamond stamped-refuse) MERGED into main:
+  // a STAMPED prepare_custom_call to the LiFi Diamond is now REFUSED at pre-sign
+  // regardless of `_receiver` (pre-sign-check.ts block 4b, #760-core). This
+  // over-block control uses a STAMPED call (customCallTx sets
+  // acknowledgedNonProtocolTarget), so it is no longer a valid "MUST PASS" case.
+  // LiFi stamped-refuse is now handled by #786 (merged); the D8 `_receiver`
+  // dimension is deferred — see test/786-lifi-stamped-refuse.test.ts. Out of the
+  // #757 recipient-seam scope (the seam defers lifi-diamond:
+  // assertRecipientsAuthorized returns early for it).
+  it.skip("over-block control — LiFi _receiver=wallet [now REFUSED by merged #786; reconciled out of #757 seam scope]", async () => {
     mockEvmRpc();
     await expect(
       previewOf(
