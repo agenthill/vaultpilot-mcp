@@ -354,6 +354,39 @@ export async function assertTransactionSafe(tx: UnsignedTx): Promise<void> {
     );
   }
 
+  // 4b) LiFi Diamond stamped-partition refusal (#786 / #760-core). The Diamond
+  //     is recognized with `allowedAbi: null`, so block 5's early return below
+  //     would otherwise let a stamped `prepare_custom_call` to it pass with NO
+  //     selector / argument / value check — a general drain (arbitrary facet
+  //     call, SwapData.callTo → arbitrary contract, attacker-chosen native
+  //     value). `prepare_swap` is the SOLE legitimate EVM prepare path
+  //     producing `to == LIFI_DIAMOND` and it is UNSTAMPED; `prepare_custom_call`
+  //     is ALWAYS stamped (server-set at execution/index.ts, non-forgeable —
+  //     the field is in no zod input schema, 3 server writers). So the stamp
+  //     deterministically partitions legit (unstamped prepare_swap → passes
+  //     below) from rogue (stamped custom_call → refused here) LiFi txs with
+  //     zero over-block. This must sit BEFORE the `allowedAbi === null` return.
+  //     EVM-ONLY: btc/solana/tron LiFi swaps (TRON uses a different Diamond)
+  //     never traverse this branch — #744 tracks the sibling class there, and
+  //     #760 is NOT closed for those chains. Deliberate availability cost: a
+  //     raw LiFi call via prepare_custom_call is refused with no override (the
+  //     right trade for an open INCIDENT). SwapData.callTo WITHIN a legitimate
+  //     unstamped prepare_swap route is a different (malicious-API) threat
+  //     actor, out of scope → #776 / Inv-#15.
+  if (dest.kind === "lifi-diamond" && tx.acknowledgedNonProtocolTarget === true) {
+    throw new Error(
+      `Pre-sign check: refusing a stamped prepare_custom_call ` +
+        `(acknowledgedNonProtocolTarget) transaction to the LiFi Diamond ` +
+        `(${tx.to}) on ${tx.chain}. The Diamond is recognized with no ` +
+        `ABI-selector gate, so an arbitrary facet call, an attacker-authored ` +
+        `SwapData.callTo, or an attacker-chosen native value would pass every ` +
+        `pre-sign check unexamined — the #760-core drain. Legitimate LiFi swaps ` +
+        `go through prepare_swap, which does not carry this stamp and is ` +
+        `unaffected. There is no override: raw prepare_custom_call access to ` +
+        `the LiFi Diamond is disabled.`
+    );
+  }
+
   // 5) For destinations where we have a tight ABI, verify the selector is one
   //    of its functions. LiFi Diamond is the explicit exception (allowedAbi=null).
   if (dest.allowedAbi === null) return;
