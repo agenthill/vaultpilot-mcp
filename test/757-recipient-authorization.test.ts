@@ -221,6 +221,15 @@ describe("#757 D2-rot — module-load anti-rot enumeration", () => {
     ] as const;
     expect(findUnclassifiedPaths([rogueAbi as unknown as Abi])).toContain("exec.blob");
   });
+
+  it("F2 — NPM mint/collect.recipient are the `recipient` hard-gate bucket (was user-directed)", () => {
+    const paths = enumerateRecognizedAddressPaths();
+    for (const fn of ["mint", "collect"] as const) {
+      const hit = paths.find((p) => p.fn === fn && p.path === "params.recipient");
+      expect(hit, `${fn}.params.recipient`).toBeDefined();
+      expect(hit!.bucket).toBe("recipient");
+    }
+  });
 });
 
 // ═══════════════════════════ D2 bucket-4 provenance ═══════════════════════════
@@ -228,6 +237,9 @@ describe("#757 D2/D3 — bucket-4 USER_DIRECTED provenance discriminator", () =>
   beforeEach(() => vi.resetModules());
   afterEach(() => vi.restoreAllMocks());
 
+  // erc20 transfer.to is the SOLE remaining bucket-4 path (prepare_token_send lets
+  // the user name a fresh address). mint/collect.recipient were reclassified to the
+  // recipient hard-gate bucket by F2 — see the F2 block below.
   it("erc20 transfer(ATTACKER) UNSTAMPED → PASSES (prepare_token_send's normal case)", async () => {
     mockEvmRpc();
     await expect(previewOf(tx(USDC, erc20Transfer(ATTACKER)))).resolves.toBeDefined();
@@ -236,21 +248,58 @@ describe("#757 D2/D3 — bucket-4 USER_DIRECTED provenance discriminator", () =>
     mockEvmRpc();
     await expect(previewOf(tx(USDC, erc20Transfer(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM mint(recipient=ATTACKER) UNSTAMPED → PASSES (live standalone tool)", async () => {
+});
+
+// ═══════════════════════════ F2 — NPM mint/collect hard-gate ══════════════════
+describe("#757 F2 — Uniswap NPM mint/collect.recipient is HARD-GATE (parity with swapRouter02)", () => {
+  beforeEach(() => vi.resetModules());
+  afterEach(() => vi.restoreAllMocks());
+
+  // THE FIX: mint/collect.recipient moved from bucket-4 (user-directed) to the
+  // recipient hard-gate bucket. An UNSTAMPED recipient≠wallet — the #757 drain
+  // reachable via the live prepare_uniswap_v3_mint/collect tools — now REFUSES
+  // (it PASSED under bucket-4). RED-on-removal: revert the SPEC bucket back to
+  // "user-directed" and these two go GREEN-passing again (i.e. the drain reopens).
+  it("UNSTAMPED collect(recipient=ATTACKER) → REFUSED (was PASSING under bucket-4)", async () => {
     mockEvmRpc();
-    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER)))).resolves.toBeDefined();
+    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(ATTACKER)))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM mint(recipient=ATTACKER) STAMPED → REFUSED", async () => {
+  it("UNSTAMPED mint(recipient=ATTACKER) → REFUSED (was PASSING under bucket-4)", async () => {
     mockEvmRpc();
-    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
+    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER)))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM collect(recipient=ATTACKER) STAMPED → REFUSED", async () => {
+
+  // No over-block: a wallet recipient still clears the hard gate, stamped or not.
+  it("UNSTAMPED collect(recipient=wallet) → PASSES (no over-block)", async () => {
+    mockEvmRpc();
+    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(WALLET)))).resolves.toBeDefined();
+  });
+  it("UNSTAMPED mint(recipient=wallet) → PASSES (no over-block)", async () => {
+    mockEvmRpc();
+    await expect(previewOf(tx(UNISWAP_NPM, npmMint(WALLET)))).resolves.toBeDefined();
+  });
+  it("STAMPED collect(recipient=wallet) → PASSES (wallet recipient clears the hard gate)", async () => {
+    mockEvmRpc();
+    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(WALLET), { stamped: true }))).resolves.toBeDefined();
+  });
+
+  // Parity with swapRouter02: a hard-gate recipient is NON-bypassable by the ack,
+  // so a STAMPED recipient≠wallet REFUSES for the NPM tools EXACTLY as it does for
+  // the already-hard-gated swapRouter02 swap recipient (the stamp only relaxes the
+  // bucket-4 path, which mint/collect no longer take).
+  it("STAMPED collect(recipient=ATTACKER) → REFUSED (hard-gate ignores the ack)", async () => {
     mockEvmRpc();
     await expect(previewOf(tx(UNISWAP_NPM, npmCollect(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM collect(recipient=wallet) STAMPED → PASSES (wallet recipient clears the hard gate)", async () => {
+  it("STAMPED mint(recipient=ATTACKER) → REFUSED (hard-gate ignores the ack)", async () => {
     mockEvmRpc();
-    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(WALLET), { stamped: true }))).resolves.toBeDefined();
+    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
+  });
+  it("PARITY — swapRouter02 exactInputSingle(recipient=ATTACKER) STAMPED → REFUSED (same hard-gate)", async () => {
+    mockEvmRpc();
+    await expect(
+      previewOf(tx(UNISWAP_SWAP_ROUTER_02, swapExactInputSingle(ATTACKER), { stamped: true })),
+    ).rejects.toThrow(REFUSAL);
   });
 });
 
