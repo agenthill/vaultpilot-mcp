@@ -27,6 +27,12 @@
  * between the cache-check and the cache-write, a later caller could read
  * a stale cache and "lose" its swap to an earlier one — that's exactly
  * what this assertion goes RED on.
+ *
+ * Scope note: these callers are macrotask-scheduled (`setTimeout(0)`), so
+ * this falsifies a macrotask/I-O yield at the check→write point — the
+ * realistic sync→async-I/O regression — but not a pure-microtask-only
+ * yield there, which is fine: a macrotask-scheduled caller can never
+ * interleave with a microtask-only yield anyway.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { getSolanaConnection, resetSolanaConnection } from "../src/modules/solana/rpc.js";
