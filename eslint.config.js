@@ -8,6 +8,14 @@
 // broad ruleset — that would surface hundreds of unrelated pre-existing
 // findings and blow up this unit's scope. Do not add rules here without a
 // tracked issue driving them.
+//
+// Node-version note (#714 review nit): eslint@^10's own engine floor
+// (^20.19.0 || ^22.13.0 || >=24, see its package.json) is HIGHER than this
+// repo's package.json `engines.node` (>=18.17.0) — a contributor on Node
+// 18.17-20.18 can install fine but can't run `npm run lint` locally. CI's
+// Node 20/22 matrix already satisfies eslint's floor. Don't lower
+// package.json's `engines.node` to "fix" this — that's a breaking change
+// for the runtime target, unrelated to the dev-only lint tool's floor.
 import tsParser from "@typescript-eslint/parser";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
 
