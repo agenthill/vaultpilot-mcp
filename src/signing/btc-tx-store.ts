@@ -21,6 +21,26 @@ interface StoredBitcoinTx {
 
 const store = new Map<string, StoredBitcoinTx>();
 
+/**
+ * Recursively `Object.freeze` `value` and every plain-object/array it
+ * reaches, so a later mutation on the object `consumeBitcoinHandle` hands
+ * back throws instead of silently sticking. Sibling of `tx-store.ts`'s
+ * `deepFreeze` (issue #710/#730) — this store has no mutable wrapper
+ * metadata (no pin/attempt fields), so the whole stored tx is fair game.
+ * Issue #742 — sweep the freeze across every chain-specific tx-store.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return value;
+  }
+  if (Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
+
 function prune(now = Date.now()): void {
   for (const [handle, entry] of store) {
     if (entry.expiresAt < now) store.delete(handle);
@@ -52,8 +72,15 @@ export function issueBitcoinHandle(
   const fingerprint = btcPayloadHash(tx.psbtBase64);
   const withHandle: UnsignedBitcoinTx = { ...tx, handle, fingerprint };
   const { handle: _h, ...stored } = withHandle;
+  // Deep-freeze the stored copy (issue #742, sibling of #710/#730) so a
+  // mutation attempt on the object `consumeBitcoinHandle` hands back
+  // cannot alter what a later `consumeBitcoinHandle` on the same handle
+  // sees. This also freezes `stored.decoded` (outputs/sources arrays) all
+  // the way down — a future post-issue enrichment step that tries to
+  // write into it will throw in strict mode; that's a flag to route the
+  // enrichment through `issueBitcoinHandle` instead of mutating in place.
   store.set(handle, {
-    tx: stored as UnsignedBitcoinTx,
+    tx: deepFreeze(stored as UnsignedBitcoinTx),
     expiresAt: Date.now() + TX_TTL_MS,
   });
   return withHandle;
