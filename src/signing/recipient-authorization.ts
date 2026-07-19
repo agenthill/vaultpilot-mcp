@@ -264,9 +264,26 @@ const SPEC: readonly FnSpec[] = [
   { abi: swapRouter02Abi, fn: "multicall", paths: { data: "bytes-recurse" } },
 ];
 
-/** `${selector}|${dottedPath}` → Bucket. Built from SPEC at module load. */
+/**
+ * `${selector}|${dottedPath}` → Bucket. The per-ADDRESS bucket source of truth,
+ * single-sourced from SPEC — the curated list of every recognized function that
+ * carries an address/opaque-bytes leaf (each annotated with the design's
+ * per-entry evidence). A recognized function with NO such leaf is deliberately
+ * absent from SPEC: it has no recipient/authority dimension to classify.
+ */
 const CLASSIFICATION: Map<string, Bucket> = new Map();
-/** selector → the AbiFunction it decodes against (for the recognized ABIs). */
+/**
+ * selector → the AbiFunction it decodes against. Populated by
+ * `buildFnBySelector()` at module load from the FULL `RECOGNIZED_ABIS_BY_KIND`
+ * state-mutating set — NOT just SPEC's address-bearing subset. A recognized
+ * function with no address/bytes leaf (WETH.withdraw, wstETH.wrap/unwrap,
+ * rETH.burn, RocketDepositPool.deposit, Uniswap increase/decrease/burn) MUST
+ * resolve here so `gateCall`/`decodeLeg` DECODE it and find it carries nothing
+ * to gate — otherwise its selector reads as "unknown" and is refused,
+ * over-blocking a flow block 5 already accepts (#757 over-block regression). A
+ * selector ABSENT here is genuinely unknown (on NO recognized ABI) and stays a
+ * fail-closed REFUSE (design D7 property 3), matching block 5's own rejection.
+ */
 const FN_BY_SELECTOR: Map<string, AbiFunction> = new Map();
 
 function fnItem(abi: Abi, name: string): AbiFunction {
@@ -277,10 +294,9 @@ function fnItem(abi: Abi, name: string): AbiFunction {
   return item;
 }
 
+// CLASSIFICATION (per-address buckets) is single-sourced from SPEC.
 for (const entry of SPEC) {
-  const item = fnItem(entry.abi, entry.fn);
-  const selector = toFunctionSelector(item).toLowerCase();
-  FN_BY_SELECTOR.set(selector, item);
+  const selector = toFunctionSelector(fnItem(entry.abi, entry.fn)).toLowerCase();
   for (const [path, bucket] of Object.entries(entry.paths)) {
     CLASSIFICATION.set(`${selector}|${path}`, bucket);
   }
@@ -360,6 +376,32 @@ function walkFunction(item: AbiFunction, args?: readonly unknown[]): Leaf[] {
   return out;
 }
 
+/**
+ * Populate `FN_BY_SELECTOR` with EVERY recognized state-mutating selector across
+ * every recognized ABI — the same per-kind domain the D2-rot enumeration walks
+ * and `acceptedSelectorSetForKind` (block 5) accepts, single-sourced from
+ * `RECOGNIZED_ABIS_BY_KIND`. This includes recognized functions with no
+ * address/bytes argument, so `gateCall`/`decodeLeg` can decode them and find
+ * they carry nothing to gate rather than refusing their selector as "unknown".
+ * A selector left ABSENT here is one on no recognized ABI → genuinely unknown →
+ * fail-closed REFUSE (design D7 property 3).
+ */
+function buildFnBySelector(): void {
+  for (const kind of Object.keys(RECOGNIZED_ABIS_BY_KIND) as RecognizedAbiKind[]) {
+    for (const abi of RECOGNIZED_ABIS_BY_KIND[kind]) {
+      for (const item of abi) {
+        if (item.type !== "function") continue;
+        if (!STATE_MUTATING.has(item.stateMutability)) continue; // exclude view/pure
+        const selector = toFunctionSelector(item).toLowerCase();
+        // First writer wins; recognized ABIs that share a selector (ERC-20
+        // approve/transfer unioned into every token kind, multicall(bytes[]) on
+        // both Uniswap ABIs) share its signature, so the decode is identical.
+        if (!FN_BY_SELECTOR.has(selector)) FN_BY_SELECTOR.set(selector, item);
+      }
+    }
+  }
+}
+
 // ── D2-rot: module-load anti-rot enumeration ────────────────────────────────
 
 /**
@@ -369,27 +411,17 @@ function walkFunction(item: AbiFunction, args?: readonly unknown[]): Leaf[] {
  * load; also exported for a dedicated boot-falsifier test.
  */
 export function assertClassificationComplete(): void {
+  // The enumerator domain and block 5's accepted-selector set are the SAME set
+  // by construction — block 5 calls `acceptedSelectorSetForKind(kind)`, and both
+  // it and this walk read `RECOGNIZED_ABIS_BY_KIND[kind]`, the design's single
+  // source. There is therefore no independent comparand to check them against
+  // (a prior "domain-divergence" sub-check compared the map against a re-walk of
+  // the same map — tautological, could never fire; removed). The genuine anti-rot
+  // is the unclassified-path throw below: it walks every state-mutating function
+  // block 5 accepts and refuses to boot if any address/opaque-bytes leaf lacks a
+  // bucket — turning "new recognized ABI silently ungated" into "won't boot".
   const kinds = Object.keys(RECOGNIZED_ABIS_BY_KIND) as RecognizedAbiKind[];
   for (const kind of kinds) {
-    // Boot falsifier (D2-rot): the enumerator's per-kind selector domain must be
-    // set-equal to the exact set block 5 accepts (both derive from
-    // RECOGNIZED_ABIS_BY_KIND — this guards a future refactor that makes block 5
-    // compute differently).
-    const accepted = acceptedSelectorSetForKind(kind);
-    const walked = new Set<string>();
-    for (const abi of RECOGNIZED_ABIS_BY_KIND[kind]) {
-      for (const item of abi) {
-        if (item.type !== "function") continue;
-        walked.add(toFunctionSelector(item).toLowerCase());
-      }
-    }
-    if (!accepted || accepted.size !== walked.size || [...walked].some((s) => !accepted.has(s))) {
-      throw new Error(
-        `recipient-authorization: enumerator domain for kind '${kind}' diverges from block 5's ` +
-          `accepted-selector set — the two must be single-sourced (design #759 D2-rot).`,
-      );
-    }
-
     for (const abi of RECOGNIZED_ABIS_BY_KIND[kind]) {
       for (const item of abi) {
         if (item.type !== "function") continue;
@@ -449,12 +481,14 @@ function gateCall(data: `0x${string}`, ctx: GateCtx): void {
   const selector = data.slice(0, 10).toLowerCase();
   const item = FN_BY_SELECTOR.get(selector);
   if (!item) {
-    // Not a classified function on any recognized ABI. Block 5 already refused a
-    // bogus selector on the recognized destination; reaching here means a
-    // sub-call selector outside the ABI — fail closed (D7 property 3).
+    // Genuinely unknown selector — on NO recognized ABI (every recognized
+    // state-mutating function, address-bearing OR not, is in FN_BY_SELECTOR).
+    // Block 5 already refuses an unknown selector on the OUTER call; reaching
+    // here also covers a multicall sub-call outside the ABI — fail closed
+    // (D7 property 3), matching block 5's own rejection.
     throw new RefusalError(
-      `Pre-sign check: sub-call selector ${selector} is not a recognized function on ${ctx.kind}. ` +
-        `Refusing to sign a multicall leg the destination's ABI does not define.`,
+      `Pre-sign check: selector ${selector} is not a recognized function on ${ctx.kind}. ` +
+        `Refusing to sign a call the destination's ABI does not define.`,
     );
   }
   let decoded: { args: readonly unknown[] };
@@ -719,6 +753,8 @@ export function findUnclassifiedPaths(abis: readonly Abi[]): string[] {
   return out;
 }
 
-// Run the completeness enumeration at module load — "new recognized ABI silently
-// ungated" becomes "won't boot" (design #759 D2-rot).
+// Build the recognized-selector decode table, then run the completeness
+// enumeration — both single-sourced from RECOGNIZED_ABIS_BY_KIND. "New
+// recognized ABI silently ungated" becomes "won't boot" (design #759 D2-rot).
+buildFnBySelector();
 assertClassificationComplete();
