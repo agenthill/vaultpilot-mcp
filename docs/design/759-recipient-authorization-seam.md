@@ -179,6 +179,18 @@ The #741-family prepare-time custom-call classifier and this pre-sign gate must 
 
 **Implementation and verdict sequencing.** DEV implements #757/#760 from this document, not from either incident's own comment thread. The pre-sign exception surface (D8's LiFi decode-coverage claim, D9's residual-scope claims) requires a SEC verdict alongside REVIEW's structural/completeness verdict before DEV starts — this is explicitly the kind of design-gates-implementation case where building ahead of the verdict risks a wasted cycle or a shipped non-fix.
 
+### Explicit scope boundary — separate mitigation tracks
+
+**#759 COVERS:** the #757 recipient-args-on-recognized-destinations class in full, plus LiFi's `_receiver` dimension (D8).
+
+**#759 does NOT cover — each is a separate mitigation track, its own artifact, its own SEC + REVIEW verdict:**
+
+- **#760-core / §3.4** — arbitrary calldata + arbitrary native value to LiFi Diamond (block-5-exempt, blind-sign class); #759 closes only the `_receiver` dimension (D8). SEC-ruled UNSOUND — REQUIRES MITIGATION (92/100 exploitability).
+- **#761 / §3.5** — Safe `execTransaction`'s `safeTxOrigin` skip of block 4; the inner `SafeTx` body (including `operation === 1` DELEGATECALL) is undecoded, compounded by a remote Safe Tx Service fetch of that inner body on a cache miss (`src/modules/safe/execute.ts:28-43`). SEC-ruled UNSOUND — REQUIRES MITIGATION (61/100 exploitability).
+- **#762 / Curve** — the Curve ack-stamp trust root, UNSETTLED pending one unverified external premise, plus four repo-side defects, a "three ack-stamp sites, not two" correction, and doc defects.
+
+**Sequencing (PM-confirmed): #759 → §3.4/#760-core → §3.5/#761 → Curve/#762.** Rationale: touch the pre-sign spine once per track, not once per issue — this boundary exists to end the per-issue spine thrash the substrate review was called to stop (repo CLAUDE.md "Pre-Sign Gate Surface Sweeps" + the cross-issue ≥3-same-failure-class trigger).
+
 ---
 
 ## 6. Open items for SEC
