@@ -509,6 +509,33 @@ describe("buildCustomCall — selector classifier (issue #652)", () => {
     ).rejects.toThrow(/CUSTOM_CALL_REFUSED[\s\S]*transfer\(address,uint256\)[\s\S]*prepare_token_send/);
   });
 
+  it("transfer refusal does NOT claim prepare_token_send applies address-poisoning checks (issue #763)", async () => {
+    // prepare_token_send's send path (resolveRecipient + assertRecipient)
+    // never calls annotatePoisoning — that annotator has exactly one
+    // importer, get_transaction_history's read-side display
+    // (src/modules/history/index.ts), and is never reached from the
+    // prepare_token_send handler (src/modules/execution/index.ts). The
+    // refusal text must not tell the agent it obtained a screening that
+    // doesn't exist on this path.
+    let caught: Error | undefined;
+    try {
+      await buildCustomCall({
+        wallet: WALLET,
+        chain: "ethereum",
+        contract: USDC,
+        fn: "transfer",
+        args: [ATTACKER, "1000000"],
+        value: "0",
+        abi: ERC20_TRANSFER_ABI as unknown as readonly unknown[],
+      });
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught?.message).not.toMatch(/applies the address-poisoning checks/);
+    expect(caught?.message).toMatch(/does NOT screen for\s+address-poisoning/);
+  });
+
   it("refuses ERC-20 transferFrom(...) and points at the safer flow", async () => {
     await expect(
       buildCustomCall({

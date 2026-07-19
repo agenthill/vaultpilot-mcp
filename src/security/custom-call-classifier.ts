@@ -194,8 +194,11 @@ export const CUSTOM_CALL_CLASSIFIER_RULES: readonly ClassifierRule[] = [
       "ERC-20 transfer via prepare_custom_call bypasses prepare_token_send's recipient " +
       "label resolution and contacts-tamper layer. Use prepare_token_send instead — it " +
       "looks up the recipient against the address book, surfaces a friendly label, and " +
-      "applies the address-poisoning checks. If you genuinely need a raw transfer through " +
-      "this escape hatch (e.g. testing a non-standard ERC-20 fork), retry with " +
+      "validates the resolved address's EIP-55 checksum. It does NOT screen for " +
+      "address-poisoning (lookalike/vanity-address) attacks — that annotation only runs " +
+      "on get_transaction_history's read-side display, never on the send path; verify the " +
+      "resolved address yourself before signing. If you genuinely need a raw transfer " +
+      "through this escape hatch (e.g. testing a non-standard ERC-20 fork), retry with " +
       "`acknowledgeKnownExfilPattern: true`.",
   },
   {
