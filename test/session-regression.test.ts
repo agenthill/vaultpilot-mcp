@@ -1,6 +1,37 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getAddress } from "viem";
+import { getAddress, encodeFunctionData } from "viem";
 import { CONTRACTS } from "../src/config/contracts.js";
+import { lifiDiamondAbi } from "../src/abis/lifi-diamond.js";
+
+/**
+ * A single clean USDC→WETH generic-swap leg (280 USDC → 0.1 WETH, baked
+ * min-out 0.0995 WETH) — #685 `vetLifiQuote` classifies it as generic-swap and
+ * SHIPs (no principal skim, min-out ≤ toAmount). Replaces the pre-#685
+ * `0xdeadbeef` placeholder, which now classifies as an unknown facet and is
+ * refused before the approval-sizing logic under test runs.
+ */
+function makeCleanUsdcWethSwapCalldata(): `0x${string}` {
+  return encodeFunctionData({
+    abi: lifiDiamondAbi,
+    functionName: "swapTokensSingleV3ERC20ToERC20",
+    args: [
+      ("0x" + "11".repeat(32)) as `0x${string}`,
+      "vaultpilot-mcp",
+      "",
+      "0xC0f5b7f7703BA95dC7C09D4eF50A830622234075" as `0x${string}`,
+      99_500_000_000_000_000n, // baked _minAmountOut = toAmountMin (0.0995 WETH)
+      {
+        callTo: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE" as `0x${string}`,
+        approveTo: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE" as `0x${string}`,
+        sendingAssetId: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as `0x${string}`,
+        receivingAssetId: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as `0x${string}`,
+        fromAmount: 280_000_000n, // == action.fromAmount (280 USDC)
+        callData: "0x" as `0x${string}`,
+        requiresDeposit: true,
+      },
+    ],
+  });
+}
 
 /**
  * Regression tests that mirror the calls made during a live Claude Code session where
@@ -1211,7 +1242,7 @@ describe("Bug 13: exact-out swap quotes (amountSide: 'to')", () => {
         },
         transactionRequest: {
           to: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
-          data: "0xdeadbeef",
+          data: makeCleanUsdcWethSwapCalldata(),
           value: "0x0",
           gasLimit: "0x30d40",
         },
@@ -1293,7 +1324,7 @@ describe("Bug 13: exact-out swap quotes (amountSide: 'to')", () => {
         },
         transactionRequest: {
           to: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
-          data: "0xdeadbeef",
+          data: makeCleanUsdcWethSwapCalldata(),
           value: "0x0",
           gasLimit: "0x30d40",
         },

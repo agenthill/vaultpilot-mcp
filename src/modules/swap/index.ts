@@ -12,6 +12,14 @@ import {
 } from "../../signing/decode-calldata.js";
 import { NON_EVM_RECEIVER_SENTINEL } from "../../abis/lifi-diamond.js";
 import { matchIntermediateChainBridge } from "./intermediate-chain-bridges.js";
+import {
+  classifyLifiQuote,
+  vetGenericSwapQuote,
+  bridgeSuspectedUnreachable,
+  LIFI_DEFAULT_SLIPPAGE,
+  MAX_EFFECTIVE_SLIPPAGE,
+  type LifiQuoteLike,
+} from "./vet-lifi-quote.js";
 import { mevExposureNote } from "./mev-hint.js";
 import { buildApprovalTx, chainApproval, resolveApprovalCap } from "../shared/approval.js";
 import type { SupportedChain, UnsignedTx } from "../../types/index.js";
@@ -228,7 +236,71 @@ function verifyLifiBridgeIntent(
 interface LifiCostLike {
   amount?: string;
   amountUSD?: string;
-  token?: { decimals?: number; priceUSD?: string };
+  // `token.address` + `included` added for #685: the source-token skim
+  // detection (`vetGenericSwapQuote` / `bridgeSuspectedUnreachable`) matches
+  // fee entries by token and excludes fees charged on top of the principal.
+  token?: { address?: string; decimals?: number; priceUSD?: string };
+  included?: boolean;
+}
+
+/**
+ * #685 — process-lifetime monotonic counter of bridge routes flagged
+ * suspected-unreachable by the source-side-only proxy (`bridgeSuspectedUnreachable`).
+ * A read-only diagnostic: the route still SHIPS status quo. A rising count (or one
+ * confirmed live bridge revert of this class) is the measured demand that promotes
+ * #745 (destination-chain-aware bridge reachability) and reopens the disable
+ * question. Exported as a live binding; `resetLifiBridgeSuspectedUnreachableCount`
+ * is for test isolation only.
+ */
+export let lifiBridgeSuspectedUnreachableCount = 0;
+
+export function resetLifiBridgeSuspectedUnreachableCount(): void {
+  lifiBridgeSuspectedUnreachableCount = 0;
+}
+
+/**
+ * Bridge-class instrumentation (PROD option (C), design §4.2 step 6). Computes
+ * the SOURCE-side-only suspected-unreachable signal; on a flag, emits a
+ * structured stderr line (stdout is the MCP stdio channel) and increments the
+ * module counter. Read-only: never REFUSEs, never adjusts a min-out, never sits
+ * before or throws within the existing bridge guards. Returns whether it fired.
+ */
+function instrumentBridgeQuote(
+  quote: LifiQuoteLike,
+  sourceToken: string,
+  ctx: { fromChain: string; toChain: string },
+): boolean {
+  const flagged = bridgeSuspectedUnreachable(quote, sourceToken);
+  if (flagged) {
+    lifiBridgeSuspectedUnreachableCount++;
+    const bridge = tryDecodeLifiBridgeData(
+      (quote.transactionRequest?.data ?? "0x") as `0x${string}`,
+    );
+    console.warn("[vaultpilot-mcp] lifi.bridge_suspected_unreachable", {
+      fromChain: ctx.fromChain,
+      toChain: ctx.toChain,
+      bridge: bridge?.bridge,
+      hasSourceSwaps: bridge?.hasSourceSwaps,
+      destinationChainId: bridge?.destinationChainId?.toString(),
+    });
+  }
+  return flagged;
+}
+
+/**
+ * #685 — the same-chain generic-swap REFUSE copy. MUST NOT steer the user to
+ * `prepare_custom_call` (PROD condition 4): that bypasses the pre-sign selector
+ * check behind a single ack WITHOUT solving reachability, so the same
+ * `CumulativeSlippageTooHigh` revert still fires with this gate silenced. Route
+ * the user to re-run `get_swap_quote` for a fresh route instead.
+ */
+function genericSwapRefuseError(reason: string): Error {
+  return new Error(
+    `prepare_swap: LiFi's baked min-out for this route cannot be proven reachable ` +
+      `at prepare time (${reason}). Returning this calldata would risk a deterministic ` +
+      `CumulativeSlippageTooHigh revert, so it is refused. Re-run get_swap_quote to fetch ` +
+      `a fresh route.`,
+  );
 }
 
 function sumLifiCostsUsd(items: readonly LifiCostLike[] | undefined): number | undefined {
@@ -422,7 +494,7 @@ export async function getSwapQuote(args: GetSwapQuoteArgs) {
     ...(args.order !== undefined ? { order: args.order } : {}),
   } as Parameters<typeof fetchQuote>[0];
 
-  const [quote, oneInchRaw] = await Promise.all([
+  const [quoteInitial, oneInchRaw] = await Promise.all([
     fetchQuote(lifiReq).catch((err: unknown) => {
       throw rephraseLifiNoRouteError(err, args);
     }),
@@ -436,6 +508,69 @@ export async function getSwapQuote(args: GetSwapQuoteArgs) {
         }).catch((err: unknown) => ({ __error: (err as Error).message }) as const)
       : Promise.resolve(undefined),
   ]);
+
+  // #685 — mirror the reachability gate on the read-only preview so the shown
+  // toAmountMin matches what prepare_swap would bake. getSwapQuote produces no
+  // signable calldata, so this NEVER throws (PROD condition 5): a generic-swap
+  // REQUOTE re-fetches to preview the reachable min-out; every unreachable /
+  // unclassifiable case attaches a SOFT `reachabilityNote` and keeps LiFi's
+  // toAmountMin as-is. A same-chain generic-swap note MUST NOT steer to
+  // prepare_custom_call. Bridges ship status quo + a source-side-only signal.
+  let quote = quoteInitial;
+  let reachabilityNote: string | undefined;
+  const previewFirstData = quote.transactionRequest?.data;
+  if (previewFirstData) {
+    const previewSourceToken = quote.action.fromToken.address as string;
+    const previewClass = classifyLifiQuote(previewFirstData as `0x${string}`);
+    if (previewClass === "bridge") {
+      const flagged = instrumentBridgeQuote(quote as unknown as LifiQuoteLike, previewSourceToken, {
+        fromChain: args.fromChain,
+        toChain: args.toChain,
+      });
+      if (flagged) {
+        reachabilityNote =
+          "min-out may be unreachable on this cross-chain route; bridge reachability is pending #745.";
+      }
+    } else if (previewClass === "generic") {
+      const v1 = vetGenericSwapQuote(quote as unknown as LifiQuoteLike, previewSourceToken);
+      if (v1.kind === "REQUOTE") {
+        const userSlip =
+          args.slippageBps !== undefined ? args.slippageBps / 10_000 : LIFI_DEFAULT_SLIPPAGE;
+        const effective = userSlip + v1.feeFraction;
+        let previewed = false;
+        if (effective <= MAX_EFFECTIVE_SLIPPAGE) {
+          try {
+            const q2 = await fetchQuote({ ...lifiReq, slippage: effective });
+            const q2Data = q2.transactionRequest?.data;
+            if (
+              q2Data &&
+              classifyLifiQuote(q2Data as `0x${string}`) === "generic" &&
+              vetGenericSwapQuote(q2 as unknown as LifiQuoteLike, q2.action.fromToken.address as string)
+                .kind === "SHIP"
+            ) {
+              quote = q2;
+              previewed = true;
+            }
+          } catch {
+            // Re-quote failed — fall through to the soft note below.
+          }
+        }
+        if (!previewed) {
+          reachabilityNote =
+            "LiFi's baked min-out for this route may be unreachable after the integrator fee " +
+            "(prepare_swap would re-quote or refuse). Re-run get_swap_quote for a fresh route.";
+        }
+      } else if (v1.kind === "REFUSE") {
+        reachabilityNote =
+          "LiFi's baked min-out for this route cannot be proven reachable at prepare time — " +
+          "prepare_swap would refuse it. Re-run get_swap_quote for a fresh route.";
+      }
+    } else {
+      reachabilityNote =
+        "this route's calldata is unrecognized; prepare_swap would refuse it. " +
+        "Re-run get_swap_quote for a fresh route.";
+    }
+  }
 
   const fromTokenDecimals = quote.action.fromToken.decimals;
   const toTokenDecimals = quote.action.toToken.decimals;
@@ -565,6 +700,7 @@ export async function getSwapQuote(args: GetSwapQuoteArgs) {
     ...(bestSource ? { bestSource } : {}),
     ...(savingsVsLifi ? { savingsVsLifi } : {}),
     ...(warning ? { warning } : {}),
+    ...(reachabilityNote ? { reachabilityNote } : {}),
   };
 }
 
@@ -766,6 +902,83 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
     throw rephraseLifiNoRouteError(err, args);
   }
 
+  // #685 — provider-baked min-out reachability gate (vetLifiQuote). The SOLE
+  // producer of a shippable GENERIC-SWAP quote: classify the first quote and,
+  // for the generic-swap class, re-quote once with a fee-padded slippage when
+  // LiFi's baked min-out is unreachable after a principal skim (integrator fee
+  // / pre-swap fee-forwarder). Placed BEFORE the guard block below so every
+  // existing guard (verifyLifiBridgeIntent, decimals cross-check, fromAmount
+  // drift, >10× sanity) validates the FINAL quote. Bridges are NOT gated — they
+  // ship via the existing prepare path and carry a source-side-only
+  // suspected-unreachable counter. The classification catch-all runs on q1 AND
+  // q2, so an unclassifiable re-quote is never shipped.
+  const firstData = quote.transactionRequest?.data;
+  if (!firstData) {
+    throw new Error("LiFi did not return a transactionRequest for this quote.");
+  }
+  let effectiveSlippageBps: number | undefined;
+  let integratorFeeBps: number | undefined;
+  const sourceTokenAddr = quote.action.fromToken.address as string;
+  const swapClass = classifyLifiQuote(firstData as `0x${string}`);
+  if (swapClass === "bridge") {
+    // Status-quo bridge flow, now instrumented (read-only, never REFUSEs).
+    instrumentBridgeQuote(quote as unknown as LifiQuoteLike, sourceTokenAddr, {
+      fromChain: args.fromChain,
+      toChain: args.toChain,
+    });
+  } else if (swapClass === "generic") {
+    const v1 = vetGenericSwapQuote(quote as unknown as LifiQuoteLike, sourceTokenAddr);
+    if (v1.kind === "REFUSE") {
+      throw genericSwapRefuseError(v1.reason);
+    }
+    if (v1.kind === "REQUOTE") {
+      const userSlip =
+        args.slippageBps !== undefined ? args.slippageBps / 10_000 : LIFI_DEFAULT_SLIPPAGE;
+      const effective = userSlip + v1.feeFraction;
+      if (effective > MAX_EFFECTIVE_SLIPPAGE) {
+        throw genericSwapRefuseError(
+          `fee-padded slippage ${(effective * 100).toFixed(2)}% exceeds the ` +
+            `${(MAX_EFFECTIVE_SLIPPAGE * 100).toFixed(0)}% ceiling`,
+        );
+      }
+      let q2: Awaited<ReturnType<typeof fetchQuote>>;
+      try {
+        q2 = await fetchQuote({ ...lifiReq, slippage: effective });
+      } catch (err: unknown) {
+        throw rephraseLifiNoRouteError(err, args);
+      }
+      const q2Data = q2.transactionRequest?.data;
+      if (!q2Data) {
+        throw genericSwapRefuseError("re-quote returned no transactionRequest calldata");
+      }
+      // Catch-all on q2 — an unclassifiable / bridge re-quote is never shipped.
+      if (classifyLifiQuote(q2Data as `0x${string}`) !== "generic") {
+        throw genericSwapRefuseError("re-quote returned a non-generic-swap route");
+      }
+      const v2 = vetGenericSwapQuote(
+        q2 as unknown as LifiQuoteLike,
+        q2.action.fromToken.address as string,
+      );
+      if (v2.kind !== "SHIP") {
+        throw genericSwapRefuseError(
+          "re-quote's baked min-out is still unreachable after fee-padded slippage",
+        );
+      }
+      quote = q2;
+      effectiveSlippageBps = Math.round(effective * 10_000);
+      integratorFeeBps = Math.round(v1.feeFraction * 10_000);
+    } else if (v1.feeFraction > 0) {
+      // SHIP on q1 whose baked min-out already absorbs the skim — disclose it.
+      integratorFeeBps = Math.round(v1.feeFraction * 10_000);
+    }
+  } else {
+    // Unknown / new facet — neither a recognized generic-swap selector nor a
+    // decodable bridge. REFUSE rather than ship an unproven min-out.
+    throw genericSwapRefuseError(
+      "route calldata is neither a recognized generic-swap facet nor a decodable bridge",
+    );
+  }
+
   const txRequest = quote.transactionRequest;
   if (!txRequest || !txRequest.to || !txRequest.data) {
     throw new Error("LiFi did not return a transactionRequest for this quote.");
@@ -926,6 +1139,13 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
         from: `${fromDisplay} ${fromSym}`,
         expectedOut: `${quotedToAmount} ${toSym}`,
         minOut: `${formatUnits(BigInt(quote.estimate.toAmountMin), quote.action.toToken.decimals)} ${toSym}`,
+        // #685 — disclose the fee-aware slippage adjustment when a principal
+        // skim was detected (display-only; changes no signed bytes beyond the
+        // corrected min-out the re-quote already baked).
+        ...(integratorFeeBps !== undefined ? { integratorFeeBps: String(integratorFeeBps) } : {}),
+        ...(effectiveSlippageBps !== undefined
+          ? { effectiveSlippageBps: String(effectiveSlippageBps) }
+          : {}),
         ...(exchangeFilterApplied
           ? {
               requestedExchanges: args.exchanges!.join(", "),
