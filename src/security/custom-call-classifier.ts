@@ -29,6 +29,25 @@
  * allowlists for the target contract.
  */
 
+// ── STUB (issue #741) — replaced by the real gate in the next commit. ──
+export interface SendFamilyGateEntry {
+  selector: `0x${string}`;
+  signature: string;
+  recipientArgIndex: number;
+}
+export const SEND_FAMILY_RECIPIENT_GATE: readonly SendFamilyGateEntry[] = [];
+export function matchSendFamilyGate(
+  _data: `0x${string}`,
+): SendFamilyGateEntry | null {
+  return null;
+}
+export function assertSendFamilyRecipientIsWallet(
+  _data: `0x${string}`,
+  _recipientIsWallet: boolean,
+): void {
+  /* stub: no gate yet */
+}
+
 export type ClassifierHardness = "refuse" | "warn";
 
 export interface ClassifierRule {

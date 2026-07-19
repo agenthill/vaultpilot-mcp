@@ -18,7 +18,7 @@
  *     re-assertion).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, type Abi } from "viem";
 
 const getContractInfoMock = vi.fn();
 vi.mock("../src/data/apis/etherscan.js", () => ({
@@ -28,6 +28,10 @@ vi.mock("../src/data/apis/etherscan.js", () => ({
 import { buildCustomCall } from "../src/modules/custom-call/actions.js";
 import { prepareCustomCallInput } from "../src/modules/execution/schemas.js";
 import { assertCanonicalDispatchOnTxChain } from "../src/security/canonical-dispatch.js";
+import {
+  matchSendFamilyGate,
+  assertSendFamilyRecipientIsWallet,
+} from "../src/security/custom-call-classifier.js";
 
 const WALLET = "0xC0f5b7f7703BA95dC7C09D4eF50A830622234075" as const;
 const TIMELOCK = "0x22bc85C483103950441EaaB8312BE9f07e234634" as const;
@@ -624,13 +628,17 @@ describe("buildCustomCall — selector classifier (issue #652)", () => {
     expect(tx.decoded?.args._classifierWarning).toMatch(/exfil-pattern bypassed/);
   });
 
-  it("attaches a soft-warn annotation to ERC-721 safeTransferFrom (no refusal)", async () => {
+  it("attaches a soft-warn annotation to ERC-721 safeTransferFrom (recipient == wallet, no refusal)", async () => {
+    // The pre-existing #652 warn annotation still fires when the recipient
+    // is the wallet — the #741 send-family recipient gate lets pull-to-self
+    // through untouched, and the warn branch below is byte-for-byte
+    // unchanged. (Non-wallet recipients now refuse — see the #741 block.)
     const tx = await buildCustomCall({
       wallet: WALLET,
       chain: "ethereum",
       contract: USDC, // contract addr is irrelevant — selector match is the gate
       fn: "safeTransferFrom",
-      args: [WALLET, ANOTHER_WALLET, "42"],
+      args: [ANOTHER_WALLET, WALLET, "42"],
       value: "0",
       abi: ERC721_SAFE_TRANSFER_FROM_ABI as unknown as readonly unknown[],
     });
@@ -671,6 +679,319 @@ describe("buildCustomCall — selector classifier (issue #652)", () => {
     });
     expect(tx.data.startsWith("0x01d5062a")).toBe(true);
     expect(tx.decoded?.args._classifierWarning).toBeUndefined();
+  });
+});
+
+// ── Issue #741 — send-family recipient-gate fixtures ──────────────────
+// Selectors whose ABI moves a THIRD PARTY's pre-authorized tokens/assets
+// (a from/owner param the ABI allows to differ from the wallet) TO a
+// call-parameter recipient. Every member's recipient is arg index 1
+// (verified — scripts/verify-send-family-selectors.mjs).
+const ERC777_OPERATOR_SEND_ABI = [
+  {
+    type: "function",
+    name: "operatorSend",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "data", type: "bytes" },
+      { name: "operatorData", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const ERC1363_TFAC_ABI = [
+  {
+    type: "function",
+    name: "transferFromAndCall",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
+
+const ERC1363_TFAC_BYTES_ABI = [
+  {
+    type: "function",
+    name: "transferFromAndCall",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
+
+const ERC4626_WITHDRAW_ABI = [
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "assets", type: "uint256" },
+      { name: "receiver", type: "address" },
+      { name: "owner", type: "address" },
+    ],
+    outputs: [{ name: "shares", type: "uint256" }],
+  },
+] as const;
+
+const ERC4626_REDEEM_ABI = [
+  {
+    type: "function",
+    name: "redeem",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "shares", type: "uint256" },
+      { name: "receiver", type: "address" },
+      { name: "owner", type: "address" },
+    ],
+    outputs: [{ name: "assets", type: "uint256" }],
+  },
+] as const;
+
+const ERC721_SAFE_TRANSFER_FROM_BYTES_ABI = [
+  {
+    type: "function",
+    name: "safeTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const ERC1155_SAFE_TRANSFER_FROM_ABI = [
+  {
+    type: "function",
+    name: "safeTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "id", type: "uint256" },
+      { name: "amount", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const ERC1155_SAFE_BATCH_ABI = [
+  {
+    type: "function",
+    name: "safeBatchTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "ids", type: "uint256[]" },
+      { name: "amounts", type: "uint256[]" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+interface SendFamilyCase {
+  label: string;
+  selector: string;
+  fn: string;
+  abi: readonly unknown[];
+  /** Build the encoded args with a given recipient (to/receiver) at arg 1. */
+  args: (to: string) => readonly unknown[];
+  /**
+   * True for selectors that ALSO carry a pre-existing #652 warn rule
+   * (ERC-721 safeTransferFrom) — those keep the warn annotation on the
+   * recipient==wallet path; the rest are unclassified once past the gate.
+   */
+  prevWarned: boolean;
+}
+
+const SEND_FAMILY_CASES: readonly SendFamilyCase[] = [
+  {
+    label: "ERC-777 operatorSend",
+    selector: "0x62ad1b83",
+    fn: "operatorSend",
+    abi: ERC777_OPERATOR_SEND_ABI as unknown as readonly unknown[],
+    args: (to) => [ANOTHER_WALLET, to, "1000000", "0x", "0x"],
+    prevWarned: false,
+  },
+  {
+    label: "ERC-1363 transferFromAndCall (3-arg)",
+    selector: "0xd8fbe994",
+    fn: "transferFromAndCall",
+    abi: ERC1363_TFAC_ABI as unknown as readonly unknown[],
+    args: (to) => [ANOTHER_WALLET, to, "1000000"],
+    prevWarned: false,
+  },
+  {
+    label: "ERC-1363 transferFromAndCall (4-arg)",
+    selector: "0xc1d34b89",
+    fn: "transferFromAndCall",
+    abi: ERC1363_TFAC_BYTES_ABI as unknown as readonly unknown[],
+    args: (to) => [ANOTHER_WALLET, to, "1000000", "0x"],
+    prevWarned: false,
+  },
+  {
+    label: "ERC-4626 withdraw",
+    selector: "0xb460af94",
+    fn: "withdraw",
+    abi: ERC4626_WITHDRAW_ABI as unknown as readonly unknown[],
+    args: (to) => ["1000000", to, ANOTHER_WALLET],
+    prevWarned: false,
+  },
+  {
+    label: "ERC-4626 redeem",
+    selector: "0xba087652",
+    fn: "redeem",
+    abi: ERC4626_REDEEM_ABI as unknown as readonly unknown[],
+    args: (to) => ["1000000", to, ANOTHER_WALLET],
+    prevWarned: false,
+  },
+  {
+    label: "ERC-721 safeTransferFrom (3-arg)",
+    selector: "0x42842e0e",
+    fn: "safeTransferFrom",
+    abi: ERC721_SAFE_TRANSFER_FROM_ABI as unknown as readonly unknown[],
+    args: (to) => [ANOTHER_WALLET, to, "42"],
+    prevWarned: true,
+  },
+  {
+    label: "ERC-721 safeTransferFrom (4-arg with bytes)",
+    selector: "0xb88d4fde",
+    fn: "safeTransferFrom",
+    abi: ERC721_SAFE_TRANSFER_FROM_BYTES_ABI as unknown as readonly unknown[],
+    args: (to) => [ANOTHER_WALLET, to, "42", "0x"],
+    prevWarned: true,
+  },
+  {
+    label: "ERC-1155 safeTransferFrom",
+    selector: "0xf242432a",
+    fn: "safeTransferFrom",
+    abi: ERC1155_SAFE_TRANSFER_FROM_ABI as unknown as readonly unknown[],
+    args: (to) => [ANOTHER_WALLET, to, "1", "1000000", "0x"],
+    prevWarned: false,
+  },
+  {
+    label: "ERC-1155 safeBatchTransferFrom",
+    selector: "0x2eb2c2d6",
+    fn: "safeBatchTransferFrom",
+    abi: ERC1155_SAFE_BATCH_ABI as unknown as readonly unknown[],
+    args: (to) => [ANOTHER_WALLET, to, ["1"], ["1000000"], "0x"],
+    prevWarned: false,
+  },
+];
+
+describe("buildCustomCall — send-family recipient gate (issue #741)", () => {
+  // RED before the gate lands: every member below is either unclassified
+  // (→ {rule:null} → allowed) or a soft warn (ERC-721 safeTransferFrom →
+  // allowed) today, so an ack-stamped drain to an ATTACKER recipient builds
+  // a tx with no refusal. The gate mirrors #727's transferFrom recipient
+  // block: recipient != wallet is value-exfil, NON-bypassable by the ack.
+  it.each(SEND_FAMILY_CASES)(
+    "refuses ack-stamped $label to a non-wallet recipient (NON-bypassable)",
+    async ({ fn, abi, args }) => {
+      await expect(
+        buildCustomCall({
+          wallet: WALLET,
+          chain: "ethereum",
+          contract: USDC,
+          fn,
+          args: args(ATTACKER),
+          value: "0",
+          abi,
+          acknowledgeKnownExfilPattern: true,
+        }),
+      ).rejects.toThrow(/CUSTOM_CALL_REFUSED[\s\S]*NOT[\s\S]*bypassable/);
+    },
+  );
+
+  it.each(SEND_FAMILY_CASES)(
+    "allows $label when the recipient is the wallet (pull-to-self, no ack needed)",
+    async ({ fn, abi, args, selector, prevWarned }) => {
+      const tx = await buildCustomCall({
+        wallet: WALLET,
+        chain: "ethereum",
+        contract: USDC,
+        fn,
+        args: args(WALLET),
+        value: "0",
+        abi,
+      });
+      expect(tx.data.startsWith(selector)).toBe(true);
+      if (prevWarned) {
+        // ERC-721 safeTransferFrom keeps its pre-existing #652 warn rule.
+        expect(tx.decoded?.args._classifierWarning).toMatch(/\[warning\]/);
+      } else {
+        expect(tx.decoded?.args._classifierWarning).toBeUndefined();
+      }
+    },
+  );
+
+  it("recipient check is case-insensitive on the wallet hex (operatorSend)", async () => {
+    const tx = await buildCustomCall({
+      wallet: WALLET,
+      chain: "ethereum",
+      contract: USDC,
+      fn: "operatorSend",
+      args: [ANOTHER_WALLET, WALLET.toLowerCase(), "1000000", "0x", "0x"],
+      value: "0",
+      abi: ERC777_OPERATOR_SEND_ABI as unknown as readonly unknown[],
+    });
+    expect(tx.data.startsWith("0x62ad1b83")).toBe(true);
+  });
+});
+
+describe("assertSendFamilyRecipientIsWallet — unit (issue #741)", () => {
+  it("throws non-bypassably when a matched selector's recipient is not the wallet", () => {
+    // operatorSend selector + recipientIsWallet=false — the deny-by-default
+    // verdict the caller computes on a missing/non-wallet recipient arg.
+    expect(() =>
+      assertSendFamilyRecipientIsWallet("0x62ad1b83deadbeef", false),
+    ).toThrow(/CUSTOM_CALL_REFUSED[\s\S]*NOT[\s\S]*bypassable/);
+  });
+
+  it("is a no-op when the recipient is the wallet", () => {
+    expect(() =>
+      assertSendFamilyRecipientIsWallet("0x62ad1b83deadbeef", true),
+    ).not.toThrow();
+  });
+
+  it("does not fire for a non-member selector (transferFrom is #727's, not here)", () => {
+    expect(matchSendFamilyGate("0x23b872dd00000000")).toBeNull();
+    // Even with recipientIsWallet=false, a non-member selector is untouched.
+    expect(() =>
+      assertSendFamilyRecipientIsWallet("0x23b872dd00000000", false),
+    ).not.toThrow();
+  });
+});
+
+describe("send-family gate selectors (#741) — bit-exact against viem", () => {
+  // Verify the hard-coded selectors in SEND_FAMILY_RECIPIENT_GATE match
+  // what viem encodes for the canonical signatures (project rule: verify
+  // cryptographic constants independently, in the committed suite).
+  it.each(SEND_FAMILY_CASES)("$label encodes to $selector", ({ fn, abi, args, selector }) => {
+    const data = encodeFunctionData({
+      abi: abi as Abi,
+      functionName: fn,
+      args: args(WALLET) as readonly unknown[],
+    });
+    expect(data.slice(0, 10)).toBe(selector);
   });
 });
 
