@@ -1,7 +1,11 @@
 import { encodeFunctionData, type Abi } from "viem";
 import { resolveContractAbi } from "../../shared/contract-abi.js";
 import { lookupKnownSpender } from "../../security/known-spenders.js";
-import { applyCustomCallClassifier } from "../../security/custom-call-classifier.js";
+import {
+  applyCustomCallClassifier,
+  matchSendFamilyGate,
+  assertSendFamilyRecipientIsWallet,
+} from "../../security/custom-call-classifier.js";
 import type { SupportedChain, UnsignedTx } from "../../types/index.js";
 import { assertNotUnlimitedBurnApproval } from "../shared/approval.js";
 
@@ -143,6 +147,27 @@ export async function buildCustomCall(p: BuildCustomCallParams): Promise<Unsigne
     !isTransferFromCall ||
     (p.args.length >= 2 &&
       String(p.args[1] ?? "").toLowerCase() === p.wallet.toLowerCase());
+
+  // Issue #741 — send-family recipient gate. Selectors that move a THIRD
+  // party's pre-authorized tokens/assets (ERC-777 operatorSend, ERC-1363
+  // transferFromAndCall, ERC-4626 withdraw/redeem, ERC-721/1155
+  // safeTransferFrom/safeBatchTransferFrom) to a call-parameter recipient
+  // are the structural siblings of transferFrom. Mirror the #727 recipient
+  // block: refuse NON-bypassably when the recipient (every member's arg
+  // index 1) is not the wallet; a missing recipient arg is deny-by-default.
+  // transferFrom (0x23b872dd) is handled by the block above, not here.
+  // The assert runs before applyCustomCallClassifier and leaves it untouched
+  // — pull-to-self (recipient == wallet) falls through to the existing
+  // verdict (ERC-721 safeTransferFrom keeps its #652 warn; the rest are
+  // unclassified).
+  const sendFamilyGate = matchSendFamilyGate(data);
+  const sendFamilyRecipientIsWallet =
+    sendFamilyGate === null ||
+    (p.args.length > sendFamilyGate.recipientArgIndex &&
+      String(p.args[sendFamilyGate.recipientArgIndex] ?? "").toLowerCase() ===
+        p.wallet.toLowerCase());
+  assertSendFamilyRecipientIsWallet(data, sendFamilyRecipientIsWallet);
+
   const classifierVerdict = applyCustomCallClassifier(
     data,
     p.acknowledgeKnownExfilPattern,
