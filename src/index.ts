@@ -1297,6 +1297,11 @@ function configStatusHandler<T>(fn: (args: T) => unknown) {
     const res = await inner(args);
     const notice = missingSetupSkillWarning();
     if (notice && Array.isArray(res.content)) {
+      // #768 boundary invariant: this append runs AFTER `handler()`'s
+      // `redactResponseContent` choke point, so anything pushed here must be
+      // key-free or already redacted. `missingSetupSkillWarning()` is a static
+      // notice, so it is safe; a future append built from a raw keyed source
+      // (an `err.message`, an RPC URL) must route through `redactSecrets` first.
       res.content.push({ type: "text", text: notice });
     }
     return res;
@@ -1326,6 +1331,12 @@ function tokenAllowancesHandler<T>(fn: (args: T) => Promise<GetTokenAllowancesRe
     } catch {
       return res;
     }
+    // #768 boundary invariant: this append runs AFTER `handler()`'s
+    // `redactResponseContent` choke point. `renderSetLevelEnumeration` is a
+    // re-render of the already-redacted `payload` (parsed back out of the
+    // first, redacted content block), so it is key-free by construction; a
+    // future append built from a raw keyed source must route through
+    // `redactSecrets` first.
     res.content.push({ type: "text", text: renderSetLevelEnumeration(payload) });
     return res;
   };
