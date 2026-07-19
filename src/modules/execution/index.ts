@@ -74,6 +74,8 @@ import {
 } from "../solana/actions.js";
 import { getSolanaConnection } from "../solana/rpc.js";
 import { assertTransactionSafe } from "../../signing/pre-sign-check.js";
+import { classifyDestination } from "../../signing/recognized-destinations.js";
+import { assertRecipientsAuthorized } from "../../signing/recipient-authorization.js";
 import {
   eip1559PreSignHash,
   payloadFingerprint,
@@ -1816,6 +1818,76 @@ async function pinSendFields(
  *
  * Handle is NOT retired here; `consumeHandle` is a non-destructive peek.
  */
+/**
+ * Recipient/authority authorization seam — incident #757/#760, design #759.
+ *
+ * Runs at BOTH the preview locus (inside `runEvmPreSignGuards`) and the send
+ * locus (inside `sendTransaction`, on the SAME frozen tx bytes with a FRESH
+ * account-set read). Two enforced dimensions:
+ *
+ *  (1) D1 fail-closed account-set precondition. A prior revision only refused
+ *      when the non-empty account set did not include `tx.from`; it fell OPEN on
+ *      an empty set (any of four peer-controlled producer states) and on a
+ *      falsy `tx.from`. Both now REFUSE. Demo mode is exempt on the narrow
+ *      ground that every EVM/TRON/Solana broadcast funnels through the single
+ *      demo-intercepted `send_transaction` — NOT the false "demo never signs"
+ *      premise (design D1 branch 3).
+ *
+ *  (2) D2/D3/D7 argument-level recipient/authority classification, resolved
+ *      against the connected-account-verified `tx.from` (design D4 predicate).
+ *
+ * The account set is the one MUTABLE input the tx-store byte-freeze (#710/#742)
+ * does not cover, which is exactly why this re-runs at send against a fresh read
+ * (design §5); the byte-dependent classification is identical at both loci
+ * because the bytes are frozen.
+ */
+async function enforceEvmRecipientAuthorization(tx: UnsignedTx): Promise<void> {
+  // The WC account-match is meaningless in demo mode: no paired session, no
+  // project ID, and `send_transaction` returns a sim envelope rather than
+  // broadcasting. Calling getConnectedAccounts() here would throw inside
+  // getProjectId() and abort the preview flow before the integrity-check / hash
+  // output the demo is meant to showcase.
+  if (isDemoMode()) return;
+
+  // D1 branch (2): a falsy/missing tx.from must REFUSE, not skip — some send
+  // paths substitute getConnectedAccounts()[0] when it is absent, so a skip
+  // would resolve the recipient against an unvalidated sender.
+  if (!tx.from) {
+    throw new Error(
+      "Pre-sign check: refusing to sign — the transaction carries no `from` account, so it cannot " +
+        "be checked against your connected WalletConnect session. Re-prepare the transaction with " +
+        "the sending wallet set, and pair Ledger Live with that account unlocked.",
+    );
+  }
+  const accounts = (await getConnectedAccounts()).map((a) => a.toLowerCase());
+  // D1 branch (1): an empty account set — via ANY of its four producer states
+  // (no session survives restore; a settled session with no eip155 namespace;
+  // an empty eip155.accounts array; every entry failing the CAIP-10/EVM_ADDRESS
+  // filter) — must REFUSE. A prior revision's `accounts.length > 0` guard fell
+  // open here, letting a peer that forces an empty set defeat the match exactly
+  // as an unpaired session would.
+  if (accounts.length === 0) {
+    throw new Error(
+      "Pre-sign check: refusing to sign — the paired WalletConnect session exposes NO usable EVM " +
+        "account (no restored session, no eip155 namespace, an empty account list, or no address " +
+        "that passes the CAIP-10 filter). The recipient/authority check cannot be anchored to a " +
+        "connected wallet, so signing is refused. Re-pair Ledger Live with an EVM account unlocked.",
+    );
+  }
+  const from = tx.from.toLowerCase();
+  if (!accounts.includes(from)) {
+    throw new Error(
+      `Pre-sign check: tx.from (${tx.from}) is not one of the accounts exposed by the paired ` +
+        `WalletConnect session (${accounts.join(", ")}). Refusing to submit. If this is a ` +
+        `different Ledger account, re-pair with that account unlocked.`,
+    );
+  }
+
+  // Byte-dependent argument-level recipient/authority classification (D2/D3/D7).
+  const dest = await classifyDestination(tx.chain, tx.to);
+  assertRecipientsAuthorized(tx, dest, tx.from as `0x${string}`);
+}
+
 async function runEvmPreSignGuards(tx: UnsignedTx): Promise<void> {
   await verifyChainId(tx.chain);
   await assertTransactionSafe(tx);
@@ -1834,22 +1906,10 @@ async function runEvmPreSignGuards(tx: UnsignedTx): Promise<void> {
         `and wait for confirmation before retrying. Use simulate_transaction to debug.`,
     );
   }
-  // The WC account-match check is meaningless in demo mode: there's no paired
-  // session (and no project ID needed), and `send_transaction` returns a sim
-  // envelope rather than broadcasting. Calling getConnectedAccounts() here
-  // would throw inside getProjectId() and abort the whole preview flow before
-  // the integrity-check / hash output the demo is meant to showcase.
-  if (tx.from && !isDemoMode()) {
-    const accounts = (await getConnectedAccounts()).map((a) => a.toLowerCase());
-    const from = tx.from.toLowerCase();
-    if (accounts.length > 0 && !accounts.includes(from)) {
-      throw new Error(
-        `Pre-sign check: tx.from (${tx.from}) is not one of the accounts exposed by the paired ` +
-          `WalletConnect session (${accounts.join(", ")}). Refusing to submit. If this is a ` +
-          `different Ledger account, re-pair with that account unlocked.`,
-      );
-    }
-  }
+  // Recipient/authority authorization seam (#757/#760, design #759). The
+  // fail-closed account-set precondition (D1) + the argument-level recipient
+  // classification (D2/D3/D7) run together here.
+  await enforceEvmRecipientAuthorization(tx);
   if (tx.verification) {
     const rehash = payloadFingerprint({
       chain: tx.chain,
@@ -2270,6 +2330,16 @@ export async function sendTransaction(args: SendTransactionArgs): Promise<{
     clearAmbiguousAttempt(args.handle);
   }
   const tx = consumeHandle(args.handle);
+  // Send-time re-check (#757/#760 design §5, N4 — ships in the SAME PR as the
+  // preview-time gate). Re-run the FULL recipient/authority classification on
+  // the SAME frozen tx bytes, but with a FRESHLY-read connected-account set as
+  // the wallet input — the account set is the one mutable input the tx-store
+  // byte-freeze does not cover, so a peer that swaps the account set (or drops
+  // to empty) between preview and send is caught here, and the D1 precondition
+  // is re-enforced fail-closed. Placed AFTER consumeHandle and BEFORE the
+  // WalletConnect forward, at the same call site that already re-reads the
+  // handle and pin.
+  await enforceEvmRecipientAuthorization(tx);
   const pinned = {
     nonce: stashed.nonce,
     maxFeePerGas: stashed.maxFeePerGas,

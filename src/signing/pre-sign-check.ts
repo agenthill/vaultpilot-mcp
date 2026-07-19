@@ -1,27 +1,30 @@
-import { decodeFunctionData, toFunctionSelector, type Abi } from "viem";
+import { decodeFunctionData, toFunctionSelector } from "viem";
 import { erc20Abi } from "../abis/erc20.js";
-import { aavePoolAbi } from "../abis/aave-pool.js";
-import { stETHAbi, wstETHAbi, lidoWithdrawalQueueAbi } from "../abis/lido.js";
-import { eigenStrategyManagerAbi } from "../abis/eigenlayer-strategy-manager.js";
-import { rocketDepositPoolAbi, rocketTokenRETHAbi } from "../abis/rocketpool.js";
-import { cometAbi } from "../abis/compound-comet.js";
-import { morphoBlueAbi } from "../abis/morpho-blue.js";
-import { uniswapPositionManagerAbi } from "../abis/uniswap-position-manager.js";
-import { swapRouter02Abi } from "../abis/uniswap-swap-router-02.js";
-import { wethAbi } from "../abis/weth.js";
 import { CONTRACTS } from "../config/contracts.js";
 import type { SupportedChain, UnsignedTx } from "../types/index.js";
+import {
+  pinnedAavePool,
+  LIFI_DIAMOND,
+  classifyDestination,
+  acceptedSelectorSetForKind,
+} from "./recognized-destinations.js";
 
-/**
- * Returns the pinned Aave V3 Pool address for `chain`. We deliberately DO NOT
- * resolve this via PoolAddressesProvider.getPool() at sign time: the pre-sign
- * check is our defense against a hostile RPC, so it must not delegate a trust-
- * root lookup to that same RPC. Pool addresses are frozen per chain since
- * Aave V3 launched and have not rotated; see contracts.ts for the source.
- */
-function pinnedAavePool(chain: SupportedChain): `0x${string}` {
-  return CONTRACTS[chain].aave.pool as `0x${string}`;
-}
+// Re-export the recognition data so existing importers of pre-sign-check keep
+// working; the definitions live in recognized-destinations.ts so the
+// recipient-authorization seam can consume them without importing this whole
+// module (which several tests partially mock).
+export {
+  classifyDestination,
+  acceptedSelectorSetForKind,
+  RECOGNIZED_ABIS_BY_KIND,
+  computeSelectorsFromAbi,
+  LIFI_DIAMOND,
+} from "./recognized-destinations.js";
+export type {
+  DestinationKind,
+  RecognizedAbiKind,
+  RecognizedDestination,
+} from "./recognized-destinations.js";
 
 /**
  * Independent pre-sign safety check. Runs in send_transaction AFTER the handle
@@ -35,158 +38,17 @@ function pinnedAavePool(chain: SupportedChain): `0x${string}` {
  * convincing the model to sign an `approve(attacker, MAX)` or a direct
  * `transfer(attacker, amount)` on some token. This check closes the approve
  * vector outright (spender allowlist) and narrows the call-surface to
- * contracts we've explicitly recognized.
+ * contracts we've explicitly recognized. The recipient/authority dimension —
+ * WHERE a recognized-destination call routes value/authority — is enforced by
+ * the separate `recipient-authorization.ts` seam (#757/#760, design #759),
+ * which runs in `runEvmPreSignGuards` after the account-set match.
  */
-
-/** LiFi Diamond — deterministic address across all our chains. Stable since 2022. */
-const LIFI_DIAMOND = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
 
 /** 4-byte selectors we treat as explicit allowlist entries. */
 const SELECTOR = {
   approve: toFunctionSelector("approve(address,uint256)").toLowerCase(),
   transfer: toFunctionSelector("transfer(address,uint256)").toLowerCase(),
 } as const;
-
-/** Kinds of destination we recognize; used for error messages only. */
-type DestinationKind =
-  | "aave-v3-pool"
-  | "compound-v3-comet"
-  | "morpho-blue"
-  | "lido-stETH"
-  | "lido-wstETH"
-  | "lido-withdrawalQueue"
-  | "rocketpool-depositPool"
-  | "rocketpool-rETH"
-  | "eigenlayer-strategyManager"
-  | "uniswap-v3-npm"
-  | "uniswap-v3-swap-router"
-  | "weth9"
-  | "known-erc20"
-  | "lifi-diamond";
-
-interface RecognizedDestination {
-  kind: DestinationKind;
-  /** ABI to check the selector against. null = skip selector check (LiFi: too many selectors). */
-  allowedAbi: Abi | null;
-}
-
-function computeSelectorsFromAbi(abi: Abi): Set<string> {
-  const out = new Set<string>();
-  for (const item of abi) {
-    if (item.type !== "function") continue;
-    try {
-      out.add(toFunctionSelector(item).toLowerCase());
-    } catch {
-      // Skip items that don't encode cleanly (shouldn't happen in our curated ABIs).
-    }
-  }
-  return out;
-}
-
-const AAVE_SELECTORS = computeSelectorsFromAbi(aavePoolAbi);
-const COMET_SELECTORS = computeSelectorsFromAbi(cometAbi);
-const MORPHO_SELECTORS = computeSelectorsFromAbi(morphoBlueAbi);
-const LIDO_STETH_SELECTORS = computeSelectorsFromAbi(stETHAbi);
-const LIDO_WSTETH_SELECTORS = computeSelectorsFromAbi(wstETHAbi);
-const LIDO_QUEUE_SELECTORS = computeSelectorsFromAbi(lidoWithdrawalQueueAbi);
-const ROCKET_DEPOSIT_POOL_SELECTORS = computeSelectorsFromAbi(rocketDepositPoolAbi);
-const ROCKET_RETH_SELECTORS = computeSelectorsFromAbi(rocketTokenRETHAbi);
-const EIGEN_SELECTORS = computeSelectorsFromAbi(eigenStrategyManagerAbi);
-const UNISWAP_NPM_SELECTORS = computeSelectorsFromAbi(uniswapPositionManagerAbi);
-const UNISWAP_SWAP_ROUTER_SELECTORS = computeSelectorsFromAbi(swapRouter02Abi);
-const ERC20_SELECTORS = computeSelectorsFromAbi(erc20Abi);
-// WETH9 is also an ERC-20 (approve/transfer for Uniswap/Compound/Morpho
-// supply flows), so the accepted surface is ERC-20 ∪ {withdraw, deposit}.
-const WETH9_SELECTORS = new Set<string>([
-  ...ERC20_SELECTORS,
-  ...computeSelectorsFromAbi(wethAbi),
-]);
-
-async function classifyDestination(
-  chain: SupportedChain,
-  to: `0x${string}`
-): Promise<RecognizedDestination | null> {
-  const lo = to.toLowerCase();
-
-  // Aave V3 Pool — pinned from a hardcoded address, NOT a live RPC read.
-  const aavePool = pinnedAavePool(chain).toLowerCase();
-  if (lo === aavePool) return { kind: "aave-v3-pool", allowedAbi: aavePoolAbi };
-
-  // Compound V3 Comet markets.
-  const compound = CONTRACTS[chain].compound as Record<string, string> | undefined;
-  if (compound) {
-    for (const addr of Object.values(compound)) {
-      if (lo === addr.toLowerCase()) {
-        return { kind: "compound-v3-comet", allowedAbi: cometAbi };
-      }
-    }
-  }
-
-  // Ethereum-only protocols.
-  if (chain === "ethereum") {
-    if (lo === CONTRACTS.ethereum.morpho.blue.toLowerCase()) {
-      return { kind: "morpho-blue", allowedAbi: morphoBlueAbi };
-    }
-    if (lo === CONTRACTS.ethereum.lido.stETH.toLowerCase()) {
-      return { kind: "lido-stETH", allowedAbi: stETHAbi };
-    }
-    // wstETH — target of prepare_lido_wrap (wrap) / prepare_lido_unwrap (unwrap).
-    if (lo === CONTRACTS.ethereum.lido.wstETH.toLowerCase()) {
-      return { kind: "lido-wstETH", allowedAbi: wstETHAbi };
-    }
-    if (lo === CONTRACTS.ethereum.lido.withdrawalQueue.toLowerCase()) {
-      return { kind: "lido-withdrawalQueue", allowedAbi: lidoWithdrawalQueueAbi };
-    }
-    // Rocket Pool — RocketDepositPool.deposit() (prepare_rocketpool_stake) and
-    // rETH.burn() (prepare_rocketpool_unstake). Fixed mainnet addresses.
-    if (lo === CONTRACTS.ethereum.rocketpool.depositPool.toLowerCase()) {
-      return { kind: "rocketpool-depositPool", allowedAbi: rocketDepositPoolAbi };
-    }
-    if (lo === CONTRACTS.ethereum.rocketpool.rETH.toLowerCase()) {
-      return { kind: "rocketpool-rETH", allowedAbi: rocketTokenRETHAbi };
-    }
-    if (lo === CONTRACTS.ethereum.eigenlayer.strategyManager.toLowerCase()) {
-      return { kind: "eigenlayer-strategyManager", allowedAbi: eigenStrategyManagerAbi };
-    }
-  }
-
-  // Uniswap V3 NonfungiblePositionManager (not currently written to by our prepare_*
-  // tools, but listed because it's in CONTRACTS and we may add LP mint/collect flows).
-  if (lo === CONTRACTS[chain].uniswap.positionManager.toLowerCase()) {
-    return { kind: "uniswap-v3-npm", allowedAbi: uniswapPositionManagerAbi };
-  }
-
-  // Uniswap V3 SwapRouter02 — target of prepare_uniswap_swap.
-  const swapRouter02 = (CONTRACTS[chain].uniswap as { swapRouter02?: string })
-    .swapRouter02;
-  if (swapRouter02 && lo === swapRouter02.toLowerCase()) {
-    return { kind: "uniswap-v3-swap-router", allowedAbi: swapRouter02Abi };
-  }
-
-  // LiFi Diamond — accept but skip per-selector check (LiFi's ABI is huge and dynamic).
-  if (lo === LIFI_DIAMOND) return { kind: "lifi-diamond", allowedAbi: null };
-
-  // WETH9 — matched BEFORE the generic tokens loop so the WETH9-specific
-  // `withdraw` / `deposit` selectors pass the per-selector check. Classified
-  // as plain `known-erc20` those selectors would be rejected even though
-  // `prepare_weth_unwrap` legitimately emits them.
-  const wethAddr = (CONTRACTS[chain].tokens as { WETH?: string } | undefined)?.WETH;
-  if (wethAddr && lo === wethAddr.toLowerCase()) {
-    return { kind: "weth9", allowedAbi: erc20Abi };
-  }
-
-  // Known ERC-20s (USDC, USDT, DAI, ...). Tokens ONLY — this path never
-  // covers a protocol contract that exposes transfer-like selectors, because
-  // the protocol branches above match first.
-  const tokens = CONTRACTS[chain].tokens as Record<string, string> | undefined;
-  if (tokens) {
-    for (const addr of Object.values(tokens)) {
-      if (lo === addr.toLowerCase()) return { kind: "known-erc20", allowedAbi: erc20Abi };
-    }
-  }
-
-  return null;
-}
 
 /** Spenders allowed for approve(spender, _). */
 function buildSpenderAllowlist(chain: SupportedChain): Set<string> {
@@ -391,42 +253,9 @@ export async function assertTransactionSafe(tx: UnsignedTx): Promise<void> {
   //    of its functions. LiFi Diamond is the explicit exception (allowedAbi=null).
   if (dest.allowedAbi === null) return;
 
-  // Pick the right precomputed selector set.
-  const allowedSelectors = (() => {
-    switch (dest.kind) {
-      case "aave-v3-pool":
-        return AAVE_SELECTORS;
-      case "compound-v3-comet":
-        return COMET_SELECTORS;
-      case "morpho-blue":
-        return MORPHO_SELECTORS;
-      case "lido-stETH":
-        // stETH is both the Lido submit surface AND an ERC-20 (transfer/approve).
-        return new Set<string>([...LIDO_STETH_SELECTORS, ...ERC20_SELECTORS]);
-      case "lido-wstETH":
-        // wstETH is both the wrap/unwrap surface AND an ERC-20 (transfer/approve).
-        return new Set<string>([...LIDO_WSTETH_SELECTORS, ...ERC20_SELECTORS]);
-      case "lido-withdrawalQueue":
-        return LIDO_QUEUE_SELECTORS;
-      case "rocketpool-depositPool":
-        return ROCKET_DEPOSIT_POOL_SELECTORS;
-      case "rocketpool-rETH":
-        // rETH is both the burn surface AND an ERC-20 (transfer/approve).
-        return new Set<string>([...ROCKET_RETH_SELECTORS, ...ERC20_SELECTORS]);
-      case "eigenlayer-strategyManager":
-        return EIGEN_SELECTORS;
-      case "uniswap-v3-npm":
-        return UNISWAP_NPM_SELECTORS;
-      case "uniswap-v3-swap-router":
-        return UNISWAP_SWAP_ROUTER_SELECTORS;
-      case "weth9":
-        return WETH9_SELECTORS;
-      case "known-erc20":
-        return ERC20_SELECTORS;
-      case "lifi-diamond":
-        return null; // handled above
-    }
-  })();
+  // Single-sourced from RECOGNIZED_ABIS_BY_KIND — the same per-kind ABI union
+  // the D2-rot enumerator walks, so the two cannot drift (design #759).
+  const allowedSelectors = acceptedSelectorSetForKind(dest.kind);
 
   if (allowedSelectors && !allowedSelectors.has(selector)) {
     throw new Error(

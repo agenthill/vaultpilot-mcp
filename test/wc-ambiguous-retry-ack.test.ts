@@ -135,6 +135,11 @@ describe("sendTransaction (EVM) — ambiguous-retry ack gate (P3)", () => {
       return {
         ...actual,
         requestSendTransaction,
+        // send_transaction now re-reads the connected-account set at send time
+        // (recipient-authorization seam, #757/#760 design §5). Expose SENDER so
+        // the fail-closed account-set precondition passes and these tests keep
+        // exercising the ambiguous-retry gate rather than tripping the new one.
+        getConnectedAccounts: async () => [SENDER],
       };
     });
     return { requestSendTransaction };
@@ -303,6 +308,9 @@ describe("sendTransaction (EVM) — ambiguous-retry ack gate (P3)", () => {
           throw new wc.WalletConnectRequestTimeoutError("legacy timeout, no probe ran");
           // default kind = "unknown"
         }),
+        // Send-time account-set re-read (recipient-authorization seam) — expose
+        // SENDER so the fail-closed precondition passes before the WC forward.
+        getConnectedAccounts: async () => [SENDER],
       };
     });
     const { issueHandles, attachPinnedGas, getAmbiguousAttempt } = await import(
