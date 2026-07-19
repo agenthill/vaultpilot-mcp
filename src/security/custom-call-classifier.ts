@@ -29,23 +29,125 @@
  * allowlists for the target contract.
  */
 
-// ── STUB (issue #741) — replaced by the real gate in the next commit. ──
+/**
+ * Issue #741 — send-family recipient gate. A selector belongs here IFF its
+ * ABI moves tokens/assets held or authorized by a THIRD PARTY (a
+ * from/owner/sender param the ABI allows to differ from the wallet,
+ * requiring a prior allowance/operator/approval) TO a recipient supplied as
+ * a call parameter. Such a call is the structural sibling of ERC-20
+ * `transferFrom` (#711/#727): the ack escape hatch is legitimate ONLY when
+ * the pulled value lands back at the wallet, so the gate asserts
+ * `recipient == wallet` and refuses anything else NON-bypassably (the ack
+ * cannot launder a non-wallet recipient; a missing recipient arg is
+ * deny-by-default — treated as not the wallet).
+ *
+ * `transferFrom(address,address,uint256)` 0x23b872dd is DELIBERATELY absent:
+ * its selector collides with ERC-20/721 `transferFrom` and is already gated
+ * by the #711/#727 branch in `applyCustomCallClassifier`. Double-handling
+ * would fork one verdict across two code paths.
+ *
+ * Every member's recipient is arg index 1 (the `to`/`receiver` param),
+ * verified selector-and-index-exact against viem —
+ * scripts/verify-send-family-selectors.mjs and the bit-exact test block.
+ *
+ * COMPLETENESS: this set reflects ARCH's threat-model enumeration; other
+ * third-party-source→recipient selectors may exist and are pending a
+ * qualified security review (issue #741).
+ */
 export interface SendFamilyGateEntry {
+  /** 4-byte function selector, lowercase hex with 0x prefix. */
   selector: `0x${string}`;
+  /** Canonical function signature, surfaced in the refusal message. */
   signature: string;
+  /** Index into the decoded args of the recipient (to/receiver) param. */
   recipientArgIndex: number;
 }
-export const SEND_FAMILY_RECIPIENT_GATE: readonly SendFamilyGateEntry[] = [];
+
+export const SEND_FAMILY_RECIPIENT_GATE: readonly SendFamilyGateEntry[] = [
+  {
+    selector: "0x62ad1b83",
+    signature: "operatorSend(address,address,uint256,bytes,bytes)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0xd8fbe994",
+    signature: "transferFromAndCall(address,address,uint256)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0xc1d34b89",
+    signature: "transferFromAndCall(address,address,uint256,bytes)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0xb460af94",
+    signature: "withdraw(uint256,address,address)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0xba087652",
+    signature: "redeem(uint256,address,address)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0x42842e0e",
+    signature: "safeTransferFrom(address,address,uint256)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0xb88d4fde",
+    signature: "safeTransferFrom(address,address,uint256,bytes)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0xf242432a",
+    signature: "safeTransferFrom(address,address,uint256,uint256,bytes)",
+    recipientArgIndex: 1,
+  },
+  {
+    selector: "0x2eb2c2d6",
+    signature: "safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)",
+    recipientArgIndex: 1,
+  },
+];
+
+/**
+ * Match the calldata's 4-byte selector against the send-family gate set.
+ * Returns the matched entry or null. Pure function — no I/O, no async.
+ */
 export function matchSendFamilyGate(
-  _data: `0x${string}`,
+  data: `0x${string}`,
 ): SendFamilyGateEntry | null {
-  return null;
+  if (data.length < 10) return null;
+  const sel = data.slice(0, 10).toLowerCase() as `0x${string}`;
+  return SEND_FAMILY_RECIPIENT_GATE.find((e) => e.selector === sel) ?? null;
 }
+
+/**
+ * Throw a NON-bypassable refusal when a send-family selector's recipient is
+ * not the wallet. `recipientIsWallet` is computed by the caller from the
+ * decoded recipient arg (deny-by-default when the arg is missing). Mirrors
+ * the #727 `transferFrom` recipient block: the `acknowledgeKnownExfilPattern`
+ * escape hatch cannot launder a non-wallet recipient. No-op for selectors
+ * outside the gate set. Runs BEFORE `applyCustomCallClassifier`, which it
+ * leaves untouched — strictly-additive defense-in-depth.
+ */
 export function assertSendFamilyRecipientIsWallet(
-  _data: `0x${string}`,
-  _recipientIsWallet: boolean,
+  data: `0x${string}`,
+  recipientIsWallet: boolean,
 ): void {
-  /* stub: no gate yet */
+  const entry = matchSendFamilyGate(data);
+  if (!entry) return;
+  if (recipientIsWallet) return;
+  throw new Error(
+    `CUSTOM_CALL_REFUSED [${entry.signature}]: the recipient (args[${entry.recipientArgIndex}]) ` +
+      `is not your wallet. This selector moves a third party's pre-authorized tokens/assets ` +
+      `(via a prior allowance/operator/approval), so sending them to an arbitrary address is ` +
+      `value-exfil and is NOT bypassable through this escape hatch — the ` +
+      `\`acknowledgeKnownExfilPattern\` override cannot launder it. The only legitimate case is ` +
+      `pulling to YOUR OWN WALLET (recipient == your wallet). If you intended to send to ` +
+      `someone else, use the protocol-specific prepare_* tool. (issue #741)`,
+  );
 }
 
 export type ClassifierHardness = "refuse" | "warn";
