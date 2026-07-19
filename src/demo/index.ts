@@ -385,18 +385,49 @@ export function buildGetDemoWalletResponse(): GetDemoWalletResponse {
 /**
  * Tools that are refused REGARDLESS of demo sub-mode. These either write
  * persistent state outside this process (Ledger pairing config, GitHub
- * issues) or require a real Ledger device (sign_message_*) — both
+ * issues, a mainnet broadcast) or require a real Ledger device — both
  * categories have no on-chain simulation equivalent. Keeps the contract
  * crisp: no Ledger? these never work in demo, ever.
+ *
+ * The `sign_` prefix (issue #772) intentionally covers the WHOLE
+ * device-signing family, not just `sign_message_*`: `sign_btc_multisig_psbt`
+ * reaches a real Ledger `signPsbt`, and any future `sign_*` tool is a
+ * device-signing tool by naming convention. Matching the prefix — rather
+ * than a hand-listed name — fails CLOSED when a new signing tool is added,
+ * instead of the prior fail-OPEN where `sign_btc_*` slipped past the
+ * narrower `sign_message_` prefix and ran the real signature in demo mode.
  */
 export function isAlwaysGatedTool(toolName: string): boolean {
   if (toolName.startsWith("pair_ledger_")) return true;
-  if (toolName.startsWith("sign_message_")) return true;
+  if (toolName.startsWith("sign_")) return true;
   return ALWAYS_GATED_EXPLICIT.has(toolName);
 }
 
 const ALWAYS_GATED_EXPLICIT = new Set([
   "request_capability", // network write to GitHub via the proxy
+  // finalize_btc_psbt with `broadcast: true` reaches `indexer.broadcastTx`
+  // (a REAL mainnet broadcast) with no simulation equivalent in the demo
+  // machinery — the broadcast-tool interception (`broadcastSimulationDispatch`)
+  // is bound to the send_transaction handle/simulate flow and cannot wrap
+  // a PSBT finalize. Demo mode's contract is that nothing real happens, so
+  // the whole tool refuses fail-closed rather than trying to distinguish the
+  // safe `broadcast: false` branch at dispatch time (the dispatcher sees only
+  // the tool name, not the args). Issue #772.
+  "finalize_btc_psbt",
+  // prepare_btc_multisig_send is a combined prepare+SIGN tool: its handler
+  // calls `signBitcoinMultisigPsbt` → Ledger `app.signPsbt` (multisig.ts:1043)
+  // UNCONDITIONALLY. The `prepare_` prefix would otherwise only CONDITIONALLY
+  // gate it, and every conditionally-gated tool except the broadcast tool runs
+  // the REAL handler in live demo (prepare_* auto-selects the whale persona) —
+  // so a demo user with a paired Ledger + a registered multisig wallet + UTXOs
+  // would get a REAL device signature. It signs unconditionally, so gating it
+  // loses no inspection-only demo UX. Same fund-safety fail-open class as
+  // finalize_btc_psbt / sign_btc_multisig_psbt above — the 3rd sink-reacher
+  // surfaced by the structural sink-gating check. Issue #772. Explicit rather
+  // than a prefix broadening because `prepare_*` is the conditional-gate
+  // prefix; listing the one signing prepare_ tool keeps every other prepare_*
+  // on its inspection-only conditional path.
+  "prepare_btc_multisig_send",
 ]);
 
 /**
