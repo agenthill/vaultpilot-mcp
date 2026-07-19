@@ -40,6 +40,26 @@ interface StoredTx {
 
 const store = new Map<string, StoredTx>();
 
+/**
+ * Recursively `Object.freeze` `value` and every plain-object/array it
+ * reaches, so a later mutation on the object `consumeTronHandle` hands back
+ * throws instead of silently sticking. Sibling of `tx-store.ts`'s
+ * `deepFreeze` (issue #710/#730) — this store has no mutable wrapper
+ * metadata (no pin/attempt fields), so the whole stored tx is fair game.
+ * Issue #742 — sweep the freeze across every chain-specific tx-store.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return value;
+  }
+  if (Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
+
 function prune(now = Date.now()): void {
   for (const [handle, entry] of store) {
     if (entry.expiresAt < now) store.delete(handle);
@@ -57,7 +77,18 @@ export function issueTronHandle(tx: UnsignedTronTx): UnsignedTronTx {
   const verification = widened.verification ?? buildTronVerification(widened);
   const withHandle: UnsignedTronTx = { ...widened, handle, verification };
   const { handle: _h, ...stored } = withHandle;
-  store.set(handle, { tx: stored as UnsignedTronTx, expiresAt: Date.now() + TX_TTL_MS });
+  // Deep-freeze the stored copy (issue #742, sibling of #710/#730) so a
+  // mutation attempt on the object `consumeTronHandle` hands back cannot
+  // alter what a later `consumeTronHandle` on the same handle sees. This
+  // also freezes `stored.verification` and `stored.decoded` all the way
+  // down — a future post-issue enrichment step that tries to write into
+  // either (e.g. attaching a simulation result after the fact) will throw
+  // in strict mode; that's a flag to route the enrichment through
+  // `issueTronHandle` instead of mutating the stored tx in place.
+  store.set(handle, {
+    tx: deepFreeze(stored as UnsignedTronTx),
+    expiresAt: Date.now() + TX_TTL_MS,
+  });
   return withHandle;
 }
 
