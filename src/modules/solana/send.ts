@@ -11,6 +11,8 @@ import {
   retireSolanaHandle,
   getSolanaDraft,
   pinSolanaHandle,
+  markSolanaBroadcastAttempted,
+  wasSolanaBroadcastAttempted,
 } from "../../signing/solana-tx-store.js";
 import { solanaPayloadFingerprint } from "../../signing/verification.js";
 import {
@@ -533,6 +535,39 @@ export async function previewSolanaSend(args: {
   // Verify the handle exists before hitting the RPC so we fail fast on stale
   // handles without burning a network call.
   const draft = getSolanaDraft(args.handle);
+
+  // Issue #788 — fail closed on re-pin after an AMBIGUOUS broadcast abort.
+  // If a broadcast was already ATTEMPTED on this handle (send_transaction
+  // reached the network `broadcastSolanaTx` call, then aborted/errored
+  // WITHOUT retiring the handle — retire is success-only), the tx MAY have
+  // landed and advanced the on-chain durable nonce. Re-fetching that advanced
+  // nonce below and re-pinning would mint a byte-different, independently-
+  // valid tx that repeats the transfer; the deterministic-signature dedupe
+  // cannot collapse it (different nonce → different bytes → different
+  // signature), so the recipient is paid again. The client cannot distinguish
+  // "never landed" from "landed but the response was lost", so we refuse and
+  // route the user to verify on-chain status before any retry. Ported from
+  // the EVM #232 late-broadcast guard.
+  //
+  // Keyed on the broadcast ATTEMPT, NOT on the nonce having moved: a benign
+  // third-party nonce advance BEFORE any broadcast attempt still previews
+  // (the flag was never set), so this does not trade the double-spend for an
+  // availability break (SEC req 3).
+  if (wasSolanaBroadcastAttempted(args.handle)) {
+    throw new Error(
+      `Refusing to re-preview Solana handle '${args.handle}': a broadcast was already ATTEMPTED ` +
+        `on this handle and did not confirm success (e.g. a client timeout / abort / RPC error). ` +
+        `That tx MAY have LANDED on-chain and advanced the durable nonce — the client cannot tell ` +
+        `"never landed" from "landed but the response was lost". Re-previewing now would re-fetch ` +
+        `the advanced nonce and pin a SECOND, byte-different, independently-valid transaction that ` +
+        `REPEATS the transfer (a double-spend the signature dedupe cannot catch). ` +
+        `Do NOT re-preview or retry this handle. First verify whether the original tx landed: call ` +
+        `get_solana_transaction_status with the durableNonce from the send response (or check a ` +
+        `block explorer for the recipient/nonce). If it landed, the transfer is already done. If it ` +
+        `did NOT land, run prepare_solana_* again for a FRESH handle and send that. Issue #788.`,
+    );
+  }
+
   const conn = getSolanaConnection();
 
   let pinned: UnsignedSolanaTx;
@@ -746,6 +781,17 @@ export async function sendSolanaTransaction(args: SendTransactionArgs): Promise<
     signature,
     messageBytes,
   ]);
+
+  // Issue #788 — mark the handle broadcast-ATTEMPTED immediately BEFORE the
+  // network call. From this point the outcome is AMBIGUOUS: an abort / client
+  // timeout / RPC error can unwind this path even though the node already
+  // accepted the tx and advanced the durable nonce. Because retire below is
+  // success-only, a throw from broadcastSolanaTx leaves the handle alive with
+  // this flag set — and `previewSolanaSend` refuses to re-pin it into a
+  // duplicate transfer. Placed AFTER signing so a definite pre-broadcast
+  // failure (gate mismatch, Ledger signing failure) — which cannot have
+  // landed — never sets the flag and never over-blocks a legitimate retry.
+  markSolanaBroadcastAttempted(args.handle);
 
   const txSignature = await broadcastSolanaTx(signedTxBytes);
   // Retire the handle only after successful broadcast. A signing or
