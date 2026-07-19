@@ -141,8 +141,11 @@ describe("C2+M10: WalletConnect peer identity", () => {
     // mandate to plain "address paired, you can now send" prose, the rogue-
     // MCP attack regresses to "user trusts whatever the agent surfaced."
     const { readFileSync } = await import("node:fs");
+    // The pair_ledger_* handlers (and their instruction prose) live in
+    // modules/pairing/index.ts since the execution/index.ts decomposition
+    // (#720). Behavior unchanged — this assertion follows the source move.
     const src = readFileSync(
-      new URL("../src/modules/execution/index.ts", import.meta.url),
+      new URL("../src/modules/pairing/index.ts", import.meta.url),
       "utf8",
     );
     // One instance per pair_ledger_* tool (btc, ltc, tron, solana, live).
