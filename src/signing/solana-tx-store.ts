@@ -168,12 +168,27 @@ interface StoredSolanaTx {
    * the next preview fails closed rather than re-pinning. Never cleared —
    * a successful broadcast retires the whole entry instead.
    *
-   * Keyed on the broadcast ATTEMPT, not on the nonce having moved: failures
-   * BEFORE the network call (preview-token / payload-hash mismatch, Ledger
-   * signing failure) never reach the mark, so a definite pre-broadcast failure
-   * (which cannot have landed) does not over-block a legitimate retry.
+   * Keyed on the broadcast ATTEMPT, set only AFTER signing: failures BEFORE
+   * the mark (preview-token / payload-hash mismatch, Ledger signing failure)
+   * never reach it, so those definite non-landings never over-block a retry.
+   * Once the mark is set the guard is deliberately fail-CLOSED even for some
+   * definite non-landings: a `broadcastSolanaTx` that throws because the
+   * `skipPreflight: false` preflight simulation REJECTED the tx never landed,
+   * yet the flag is already set and the next preview refuses. That over-block
+   * is the accepted price — the client cannot, in general, tell a preflight
+   * reject from an abort-that-landed, so erring toward refusal is correct.
    */
   broadcastAttempted?: boolean;
+  /**
+   * The base58 ed25519 signature of the exact bytes handed to
+   * `broadcastSolanaTx` — i.e. the Solana transaction id (`txHash`). Persisted
+   * in the SAME write as `broadcastAttempted`, BEFORE the RPC, so an
+   * abort-but-landed unwind leaves `preview_solana_send` able to emit an
+   * EXECUTABLE recovery: the signature is the `txHash` arg the refusal routes
+   * the agent to paste into `get_transaction_status`. Issue #788 / #792 —
+   * without it the refusal could only wave at "check a block explorer".
+   */
+  signature?: string;
   expiresAt: number;
 }
 
@@ -411,17 +426,26 @@ export function retireSolanaHandle(handle: string): void {
 }
 
 /**
- * Mark `handle` as having had a network broadcast ATTEMPTED on it. Issue
- * #788. Called by `sendSolanaTransaction` immediately before
- * `broadcastSolanaTx`, so the flag is already set when an abort/timeout/RPC
- * error unwinds the send path without retiring the handle. No-op on an
- * unknown/expired handle (nothing left to protect). See `StoredSolanaTx.
- * broadcastAttempted` for the full rationale.
+ * Mark `handle` as having had a network broadcast ATTEMPTED on it, persisting
+ * the broadcast `signature` (base58 txHash) alongside the flag in one write.
+ * Issue #788 / #792. Called by `sendSolanaTransaction` immediately before
+ * `broadcastSolanaTx`, so BOTH are already durable when an abort/timeout/RPC
+ * error unwinds the send path without retiring the handle — the flag makes the
+ * next preview fail closed, and the signature lets that refusal emit an
+ * executable `get_transaction_status` recovery. No-op on an unknown/expired
+ * handle (nothing left to protect). See `StoredSolanaTx.broadcastAttempted` /
+ * `.signature` for the full rationale.
  */
-export function markSolanaBroadcastAttempted(handle: string): void {
+export function markSolanaBroadcastAttempted(
+  handle: string,
+  signature: string,
+): void {
   prune();
   const entry = store.get(handle);
-  if (entry) entry.broadcastAttempted = true;
+  if (entry) {
+    entry.broadcastAttempted = true;
+    entry.signature = signature;
+  }
 }
 
 /**
@@ -433,6 +457,20 @@ export function markSolanaBroadcastAttempted(handle: string): void {
 export function wasSolanaBroadcastAttempted(handle: string): boolean {
   prune();
   return store.get(handle)?.broadcastAttempted === true;
+}
+
+/**
+ * The base58 signature (txHash) persisted when the broadcast was ATTEMPTED on
+ * `handle`, or `undefined` if none was recorded. Issue #788 / #792 —
+ * `previewSolanaSend` reads this to put the real `txHash` inline in its
+ * fail-closed refusal so the agent can paste it verbatim into
+ * `get_transaction_status`.
+ */
+export function getSolanaBroadcastSignature(
+  handle: string,
+): string | undefined {
+  prune();
+  return store.get(handle)?.signature;
 }
 
 /** Test-only: true if `handle` is still active (not retired, not expired). */

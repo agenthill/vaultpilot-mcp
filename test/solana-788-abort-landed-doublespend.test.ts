@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Keypair, PublicKey } from "@solana/web3.js";
+import bs58 from "bs58";
 
 /**
  * Acceptance regression for issue #788 — Solana abort-but-landed double
@@ -274,5 +275,144 @@ describe("#788 Solana abort-but-landed double-execution regression", () => {
     expect(second.recentBlockhash).toBe(NONCE_V1);
     expect(second.nonce!.value).toBe(NONCE_V1);
     expect(second.messageBase64).not.toBe(firstPin.messageBase64);
+  });
+});
+
+/**
+ * #792 rework — the abort-but-landed guard fires correctly, but its refusal
+ * message must also give the agent an EXECUTABLE recovery. These falsifiers
+ * cover the three defects fixed on top of #792's guard:
+ *
+ *   1. The ed25519 signature (base58 txHash) is PERSISTED on the store entry in
+ *      the same pre-broadcast write as `broadcastAttempted` — so it survives an
+ *      abort that unwinds the send path (crash-safety), and is available at the
+ *      later `previewSolanaSend` refusal site where the send-time `signature`
+ *      local is long out of scope.
+ *   2. The refusal names the REAL tool (`get_transaction_status`) and emits the
+ *      signature + durableNonce INLINE, verbatim-acceptable to that tool's zod
+ *      schema — not the nonexistent `get_solana_transaction_status`, and not a
+ *      dangling "durableNonce from the send response" (there is no response at
+ *      the preview site).
+ *   3. The refusal no longer directs a fresh `prepare_solana_*` as clearance —
+ *      that path re-spends when the original landed (#797). It is named only in
+ *      a prohibition, gated behind a resolved landing verdict.
+ */
+describe("#792 executable abort-but-landed recovery message", () => {
+  // The Ledger mock signs with 64 bytes of 0x07 (see beforeEach); base58 of
+  // that IS the Solana txHash the refusal must surface.
+  const EXPECTED_SIG = bs58.encode(Buffer.alloc(64, 7));
+
+  /** Drive prepare -> preview -> send(abort-but-landed) -> nonce advances. */
+  async function driveAbortLandedState(): Promise<{ handle: string }> {
+    const { buildSolanaNativeSend } = await import(
+      "../src/modules/solana/actions.js"
+    );
+    const { previewSolanaSend, sendTransaction } = await import(
+      "../src/modules/execution/index.js"
+    );
+    const draft = await buildSolanaNativeSend({
+      wallet: WALLET,
+      to: RECIPIENT,
+      amount: "0.1",
+    });
+    const firstPin = await previewSolanaSend({ handle: draft.handle });
+
+    connectionStub.sendRawTransaction.mockRejectedValueOnce(
+      Object.assign(new Error("Broadcast aborted after 10000ms"), {
+        name: "AbortError",
+      }),
+    );
+    await expect(
+      sendTransaction({
+        handle: draft.handle,
+        confirmed: true,
+        previewToken: firstPin.previewToken,
+        userDecision: "send",
+      }),
+    ).rejects.toThrow();
+
+    const { getNonceAccountValue } = await import(
+      "../src/modules/solana/nonce.js"
+    );
+    (getNonceAccountValue as ReturnType<typeof vi.fn>).mockResolvedValue({
+      nonce: NONCE_V1,
+      authority: new PublicKey(WALLET),
+    });
+    return { handle: draft.handle };
+  }
+
+  it("persists the ed25519 signature (base58 txHash) in the pre-broadcast write, surviving an abort", async () => {
+    const { getSolanaBroadcastSignature } = await import(
+      "../src/signing/solana-tx-store.js"
+    );
+    const { handle } = await driveAbortLandedState();
+
+    // The broadcast THREW (abort), yet the signature must already be durable —
+    // it is written alongside `broadcastAttempted` BEFORE broadcastSolanaTx.
+    const sig = getSolanaBroadcastSignature(handle);
+    expect(
+      sig,
+      "signature must be persisted on the store entry before the RPC, so it " +
+        "survives an abort-but-landed unwind and is readable at the refusal site",
+    ).toBe(EXPECTED_SIG);
+    // Solana signatures are base58, 86-88 chars — the exact txHash shape
+    // get_transaction_status accepts.
+    expect(sig!.length).toBeGreaterThanOrEqual(86);
+    expect(sig!.length).toBeLessThanOrEqual(88);
+    expect(/^[1-9A-HJ-NP-Za-km-z]{86,88}$/.test(sig!)).toBe(true);
+  });
+
+  it("emits an EXECUTABLE get_transaction_status recovery (inline signature + durableNonce, schema-valid), with no nonexistent tool and no fresh-prepare clearance", async () => {
+    const { previewSolanaSend } = await import(
+      "../src/modules/execution/index.js"
+    );
+    const { getTransactionStatusInput } = await import(
+      "../src/modules/execution/schemas.js"
+    );
+    const { handle } = await driveAbortLandedState();
+
+    // Re-preview the SAME handle -> the guard fires -> capture the refusal.
+    const err = await previewSolanaSend({ handle }).then(
+      () => {
+        throw new Error("expected previewSolanaSend to refuse, but it resolved");
+      },
+      (e: unknown) => e as Error,
+    );
+    const msg = err.message;
+
+    // Names the REAL tool; NOT the nonexistent one #792 shipped.
+    expect(msg).toContain("get_transaction_status(chain='solana'");
+    expect(msg).not.toContain("get_solana_transaction_status");
+    // No dangling "from the send response" — there is no response at the
+    // preview site.
+    expect(msg).not.toMatch(/from the send response/i);
+
+    // The signature is inline and verbatim-pasteable as the txHash arg.
+    expect(msg).toContain(`txHash='${EXPECTED_SIG}'`);
+    // durableNonce shape is inline.
+    expect(msg).toMatch(/durableNonce=\{ noncePubkey: '[^']+', nonceValue: '[^']+' \}/);
+
+    // Extract the emitted args and prove get_transaction_status's schema
+    // accepts them VERBATIM (the strongest "executable" evidence).
+    const txHash = msg.match(/txHash='([^']+)'/)?.[1];
+    const noncePubkey = msg.match(/noncePubkey: '([^']+)'/)?.[1];
+    const nonceValue = msg.match(/nonceValue: '([^']+)'/)?.[1];
+    expect(txHash).toBe(EXPECTED_SIG);
+    expect(noncePubkey).toBeTruthy();
+    expect(nonceValue).toBeTruthy();
+    expect(() =>
+      getTransactionStatusInput.parse({
+        chain: "solana",
+        txHash,
+        durableNonce: { noncePubkey, nonceValue },
+      }),
+    ).not.toThrow();
+
+    // Fresh-prepare is no longer directed as clearance: the old unconditional
+    // phrasing is gone, and prepare_solana_* survives only inside a prohibition.
+    expect(msg).not.toMatch(
+      /run prepare_solana_\* again for a FRESH handle and send that/i,
+    );
+    expect(msg).toContain("do NOT run prepare_solana_* for a fresh handle");
   });
 });
