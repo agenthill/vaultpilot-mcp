@@ -191,8 +191,17 @@ function findFunction(sf: ts.SourceFile, name: string): ts.Node | null {
   return null;
 }
 
-/** True if this function-like node's own body contains a sink call-site. */
-function bodyHasSink(fnNode: ts.Node): boolean {
+/**
+ * True if this function-like node's own body contains a sink call-site.
+ *
+ * Exported (in addition to being used internally by `reachesSinkFromNode`)
+ * so issue #778's positive-liveness test can drive the WalletConnect
+ * `eth_sendTransaction` call-literal branch directly against a synthetic
+ * parsed node — independent of which real registered tool's call graph
+ * happens to reach it first. See
+ * `test/support/sink-reachability.wc-matcher.test.ts`.
+ */
+export function bodyHasSink(fnNode: ts.Node): boolean {
   let found = false;
   const visit = (node: ts.Node) => {
     if (found) return;
