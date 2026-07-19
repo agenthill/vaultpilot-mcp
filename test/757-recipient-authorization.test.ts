@@ -221,6 +221,79 @@ describe("#757 D2-rot — module-load anti-rot enumeration", () => {
     ] as const;
     expect(findUnclassifiedPaths([rogueAbi as unknown as Abi])).toContain("exec.blob");
   });
+
+  it("F2 — NPM mint/collect.recipient are the `recipient` hard-gate bucket (was user-directed)", () => {
+    const paths = enumerateRecognizedAddressPaths();
+    for (const fn of ["mint", "collect"] as const) {
+      const hit = paths.find((p) => p.fn === fn && p.path === "params.recipient");
+      expect(hit, `${fn}.params.recipient`).toBeDefined();
+      expect(hit!.bucket).toBe("recipient");
+    }
+  });
+});
+
+// ═══════════════════════════ F1 — walkParam total over the grammar ════════════
+describe("#757 F1 — walkParam is TOTAL over the ABI type grammar (no blind shape)", () => {
+  // A leaf the walker never emits is a leaf the boot enumeration never demands a
+  // bucket for and gateCall never gates. PRE-F1 these shapes emitted NO leaf, so
+  // findUnclassifiedPaths could not see them — a recipient hidden in an
+  // `address[2]`/`tuple[2]`/`bytes20` on a recognized dest booted clean and signed.
+  // POST-F1 the walker decomposes every shape and the detector reports it. Each
+  // `toContain` goes RED if the walkParam total-grammar rewrite is reverted (the
+  // old walker's trailing scalar no-op swallows these), while the CONTROL stays
+  // GREEN either way — proving the detection is the fix, not a broken apparatus.
+  const mkAbi = (name: string, inputs: readonly unknown[]): Abi =>
+    [{ type: "function", name, stateMutability: "nonpayable", inputs, outputs: [] }] as unknown as Abi;
+
+  it("address[2] (fixed-size array) recipient is DETECTED", () => {
+    expect(findUnclassifiedPaths([mkAbi("distribute", [{ name: "recipient", type: "address[2]" }])])).toContain(
+      "distribute.recipient",
+    );
+  });
+  it("address[][] (nested array) recipient is DETECTED", () => {
+    expect(findUnclassifiedPaths([mkAbi("fanout", [{ name: "recipient", type: "address[][]" }])])).toContain(
+      "fanout.recipient",
+    );
+  });
+  it("tuple[2] (fixed-size tuple array) with an address field is DETECTED", () => {
+    const abi = mkAbi("batch", [
+      {
+        name: "orders",
+        type: "tuple[2]",
+        components: [
+          { name: "recipient", type: "address" },
+          { name: "amount", type: "uint256" },
+        ],
+      },
+    ]);
+    expect(findUnclassifiedPaths([abi])).toContain("batch.orders.recipient");
+  });
+  it("bytes[2] (fixed-size bytes array) is DETECTED (recurse leaf)", () => {
+    expect(findUnclassifiedPaths([mkAbi("execMany", [{ name: "calls", type: "bytes[2]" }])])).toContain(
+      "execMany.calls",
+    );
+  });
+  it("bytes20 (bytesM, M≠32) is DETECTED (opaque leaf)", () => {
+    expect(findUnclassifiedPaths([mkAbi("tag", [{ name: "blob", type: "bytes20" }])])).toContain("tag.blob");
+  });
+  it("SEC's exact falsifier — address[2] recipient + bytes20 param on one fn, BOTH detected", () => {
+    const abi = mkAbi("drain", [
+      { name: "recipient", type: "address[2]" },
+      { name: "note", type: "bytes20" },
+    ]);
+    const unclassified = findUnclassifiedPaths([abi]);
+    expect(unclassified).toContain("drain.recipient");
+    expect(unclassified).toContain("drain.note");
+  });
+  it("CONTROL — plain uint256/bool/string args emit NO leaf (walker is total, not over-eager)", () => {
+    const abi = mkAbi("noop", [
+      { name: "amount", type: "uint256" },
+      { name: "flag", type: "bool" },
+      { name: "memo", type: "string" },
+      { name: "ids", type: "uint256[]" },
+    ]);
+    expect(findUnclassifiedPaths([abi])).toHaveLength(0);
+  });
 });
 
 // ═══════════════════════════ D2 bucket-4 provenance ═══════════════════════════
@@ -228,6 +301,9 @@ describe("#757 D2/D3 — bucket-4 USER_DIRECTED provenance discriminator", () =>
   beforeEach(() => vi.resetModules());
   afterEach(() => vi.restoreAllMocks());
 
+  // erc20 transfer.to is the SOLE remaining bucket-4 path (prepare_token_send lets
+  // the user name a fresh address). mint/collect.recipient were reclassified to the
+  // recipient hard-gate bucket by F2 — see the F2 block below.
   it("erc20 transfer(ATTACKER) UNSTAMPED → PASSES (prepare_token_send's normal case)", async () => {
     mockEvmRpc();
     await expect(previewOf(tx(USDC, erc20Transfer(ATTACKER)))).resolves.toBeDefined();
@@ -236,21 +312,58 @@ describe("#757 D2/D3 — bucket-4 USER_DIRECTED provenance discriminator", () =>
     mockEvmRpc();
     await expect(previewOf(tx(USDC, erc20Transfer(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM mint(recipient=ATTACKER) UNSTAMPED → PASSES (live standalone tool)", async () => {
+});
+
+// ═══════════════════════════ F2 — NPM mint/collect hard-gate ══════════════════
+describe("#757 F2 — Uniswap NPM mint/collect.recipient is HARD-GATE (parity with swapRouter02)", () => {
+  beforeEach(() => vi.resetModules());
+  afterEach(() => vi.restoreAllMocks());
+
+  // THE FIX: mint/collect.recipient moved from bucket-4 (user-directed) to the
+  // recipient hard-gate bucket. An UNSTAMPED recipient≠wallet — the #757 drain
+  // reachable via the live prepare_uniswap_v3_mint/collect tools — now REFUSES
+  // (it PASSED under bucket-4). RED-on-removal: revert the SPEC bucket back to
+  // "user-directed" and these two go GREEN-passing again (i.e. the drain reopens).
+  it("UNSTAMPED collect(recipient=ATTACKER) → REFUSED (was PASSING under bucket-4)", async () => {
     mockEvmRpc();
-    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER)))).resolves.toBeDefined();
+    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(ATTACKER)))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM mint(recipient=ATTACKER) STAMPED → REFUSED", async () => {
+  it("UNSTAMPED mint(recipient=ATTACKER) → REFUSED (was PASSING under bucket-4)", async () => {
     mockEvmRpc();
-    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
+    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER)))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM collect(recipient=ATTACKER) STAMPED → REFUSED", async () => {
+
+  // No over-block: a wallet recipient still clears the hard gate, stamped or not.
+  it("UNSTAMPED collect(recipient=wallet) → PASSES (no over-block)", async () => {
+    mockEvmRpc();
+    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(WALLET)))).resolves.toBeDefined();
+  });
+  it("UNSTAMPED mint(recipient=wallet) → PASSES (no over-block)", async () => {
+    mockEvmRpc();
+    await expect(previewOf(tx(UNISWAP_NPM, npmMint(WALLET)))).resolves.toBeDefined();
+  });
+  it("STAMPED collect(recipient=wallet) → PASSES (wallet recipient clears the hard gate)", async () => {
+    mockEvmRpc();
+    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(WALLET), { stamped: true }))).resolves.toBeDefined();
+  });
+
+  // Parity with swapRouter02: a hard-gate recipient is NON-bypassable by the ack,
+  // so a STAMPED recipient≠wallet REFUSES for the NPM tools EXACTLY as it does for
+  // the already-hard-gated swapRouter02 swap recipient (the stamp only relaxes the
+  // bucket-4 path, which mint/collect no longer take).
+  it("STAMPED collect(recipient=ATTACKER) → REFUSED (hard-gate ignores the ack)", async () => {
     mockEvmRpc();
     await expect(previewOf(tx(UNISWAP_NPM, npmCollect(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
   });
-  it("Uniswap NPM collect(recipient=wallet) STAMPED → PASSES (wallet recipient clears the hard gate)", async () => {
+  it("STAMPED mint(recipient=ATTACKER) → REFUSED (hard-gate ignores the ack)", async () => {
     mockEvmRpc();
-    await expect(previewOf(tx(UNISWAP_NPM, npmCollect(WALLET), { stamped: true }))).resolves.toBeDefined();
+    await expect(previewOf(tx(UNISWAP_NPM, npmMint(ATTACKER), { stamped: true }))).rejects.toThrow(REFUSAL);
+  });
+  it("PARITY — swapRouter02 exactInputSingle(recipient=ATTACKER) STAMPED → REFUSED (same hard-gate)", async () => {
+    mockEvmRpc();
+    await expect(
+      previewOf(tx(UNISWAP_SWAP_ROUTER_02, swapExactInputSingle(ATTACKER), { stamped: true })),
+    ).rejects.toThrow(REFUSAL);
   });
 });
 
@@ -337,20 +450,15 @@ describe("#757 D1 — fail-closed account-set precondition (PREVIEW locus)", () 
   beforeEach(() => vi.resetModules());
   afterEach(() => vi.restoreAllMocks());
 
-  // All four empty-producer states collapse to getConnectedAccounts() === [] at
-  // this seam — the guard refuses on the empty RESULT, independent of WHICH
-  // producer emptied it (design D1 branch 1).
-  for (const producer of [
-    "(a) no session survives restore",
-    "(b) settled session, no eip155 namespace",
-    "(c) empty eip155.accounts array",
-    "(d) every entry fails the CAIP-10/EVM_ADDRESS filter",
-  ]) {
-    it(`empty account set via ${producer} → REFUSED (even with a wallet recipient)`, async () => {
-      mockEvmRpc([]);
-      await expect(previewOf(tx(AAVE_V3_POOL, aaveWithdraw(WALLET)))).rejects.toThrow(REFUSAL);
-    });
-  }
+  // Empty account set → REFUSED — the D1 branch-1 LINKAGE (gate refuses on the
+  // empty RESULT, independent of which producer emptied it). The FOUR distinct
+  // producer states that each empty the set are exercised against the REAL
+  // getConnectedAccounts in test/757-d1-producer-states.test.ts; a stub-`[]` ×4
+  // loop here could not tell them apart (REVIEW's overclaim finding).
+  it("empty account set → REFUSED (even with a wallet recipient)", async () => {
+    mockEvmRpc([]);
+    await expect(previewOf(tx(AAVE_V3_POOL, aaveWithdraw(WALLET)))).rejects.toThrow(REFUSAL);
+  });
 
   it("falsy/missing tx.from (non-demo) → REFUSED (design D1 branch 2)", async () => {
     mockEvmRpc([WALLET]);

@@ -343,8 +343,10 @@ describe("#760 falsifiers — LiFi Diamond allowedAbi:null (block 5 does not run
 
   // Reconciled after #786/#789 (LiFi Diamond stamped-refuse) MERGED into main:
   // a STAMPED prepare_custom_call to the LiFi Diamond is now REFUSED at pre-sign
-  // regardless of `_receiver` (pre-sign-check.ts block 4b, #760-core). This
-  // over-block control uses a STAMPED call (customCallTx sets
+  // regardless of `_receiver`. That refuse is pre-sign-check.ts block 4b, which
+  // landed on main via merged #786/#789 — NOT this branch, and NOT #760-core (the
+  // separate undecodable-calldata track below). This over-block control uses a
+  // STAMPED call (customCallTx sets
   // acknowledgedNonProtocolTarget), so it is no longer a valid "MUST PASS" case.
   // LiFi stamped-refuse is now handled by #786 (merged); the D8 `_receiver`
   // dimension is deferred — see test/786-lifi-stamped-refuse.test.ts. Out of the

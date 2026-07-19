@@ -234,16 +234,20 @@ const SPEC: readonly FnSpec[] = [
   { abi: eigenStrategyManagerAbi, fn: "depositIntoStrategy", paths: { strategy: "non-recipient", token: "non-recipient" } },
 
   // ── Uniswap V3 NonfungiblePositionManager ─────────────────────────────────
-  // `params.token0`/`token1` token-identity. `mint`/`collect.recipient` are
-  // user-choosable on the live standalone tools (prepare_uniswap_v3_mint/collect
-  // build `recipient = p.recipient ?? p.wallet`) → bucket 4, stamp-conditioned
-  // (D3). `multicall` → per-leg recursion (D7).
+  // `params.token0`/`token1` token-identity. `mint`/`collect.recipient` are a
+  // swap-output recipient — the same class as `swapRouter02.recipient`, which is
+  // already hard-gated — so they are HARD-GATE too (wallet-only, D4), not bucket 4:
+  // the bucket-4 "user sees it on-device before signing" premise is unverifiable,
+  // and an unstamped prepare_uniswap_v3_mint/collect(recipient=ATTACKER) otherwise
+  // passes (the #757 drain shape). Legit builds set recipient = wallet and clear
+  // the gate; a genuinely different recipient goes through Ledger Live directly.
+  // `multicall` → per-leg recursion (D7).
   {
     abi: uniswapPositionManagerAbi,
     fn: "mint",
-    paths: { "params.token0": "non-recipient", "params.token1": "non-recipient", "params.recipient": "user-directed" },
+    paths: { "params.token0": "non-recipient", "params.token1": "non-recipient", "params.recipient": "recipient" },
   },
-  { abi: uniswapPositionManagerAbi, fn: "collect", paths: { "params.recipient": "user-directed" } },
+  { abi: uniswapPositionManagerAbi, fn: "collect", paths: { "params.recipient": "recipient" } },
   { abi: uniswapPositionManagerAbi, fn: "multicall", paths: { data: "bytes-recurse" } },
 
   // ── Uniswap V3 SwapRouter02 ───────────────────────────────────────────────
@@ -307,7 +311,12 @@ for (const entry of SPEC) {
 interface Leaf {
   /** Dotted path with array indices (`[0]`) where present. */
   path: string;
-  kind: "address" | "bytes" | "recurse";
+  /**
+   * `address` / `bytes` (opaque scalar) / `recurse` (`bytes[]` sub-call vector) /
+   * `unhandled` — a type the walker cannot categorize. An `unhandled` leaf has no
+   * SPEC bucket by construction, so it fails the boot enumeration (design F1).
+   */
+  kind: "address" | "bytes" | "recurse" | "unhandled";
   /** Decoded value (runtime); undefined at boot enumeration. */
   value?: unknown;
 }
@@ -321,26 +330,50 @@ function normalizePath(path: string): string {
 
 function walkParam(param: AbiParameter, value: unknown, path: string, out: Leaf[]): void {
   const t = param.type;
+
+  // Opaque `bytes` ARRAY (`bytes[]`, `bytes[k]`) → ONE recurse leaf carrying the
+  // whole array (the `multicall(bytes[])` sub-call vector). Handled before the
+  // generic array strip below so it is NOT flattened element-wise into bytes
+  // leaves — the classification recurses into the legs, it does not gate them
+  // as opaque scalars.
+  if (/^bytes\[\d*\]$/.test(t)) {
+    out.push({ path, kind: "recurse", value });
+    return;
+  }
+
+  // Any OTHER array (dynamic `[]` or fixed `[k]`, arbitrarily nested): strip the
+  // OUTERMOST array group and recurse on the element type. This makes the whole
+  // array grammar total — `address[]`, `address[2]`, `address[][]`, `tuple[]`,
+  // `tuple[2]`, `uint256[]`, … all decompose to their element's leaves instead of
+  // a fixed allowlist of the few shapes that happen to appear today (design F1).
+  const arr = /^(.+)(\[\d*\])$/.exec(t);
+  if (arr) {
+    const elemParam = { ...param, type: arr[1] } as AbiParameter;
+    if (Array.isArray(value)) {
+      value.forEach((el, idx) => walkParam(elemParam, el, `${path}[${idx}]`, out));
+    } else {
+      // Boot enumeration / absent value: recurse ONCE with no value so the
+      // element type still emits its leaf(s) for the completeness demand. Path
+      // carries no `[idx]` here, matching normalizePath's SPEC-key form.
+      walkParam(elemParam, undefined, path, out);
+    }
+    return;
+  }
+
   if (t === "address") {
     out.push({ path, kind: "address", value });
     return;
   }
-  if (t === "address[]") {
-    if (Array.isArray(value)) {
-      value.forEach((el, idx) => out.push({ path: `${path}[${idx}]`, kind: "address", value: el }));
-    } else {
-      out.push({ path, kind: "address", value: undefined });
-    }
-    return;
-  }
-  if (t === "bytes" || t === "bytes32") {
+
+  // Opaque bytes SCALAR: `bytes` and `bytesM` for ANY M ∈ 1..32. There is no
+  // decoder for its contents, so a recipient can hide inside it — it MUST be
+  // enumerated and bucketed (SPEC classifies it require-empty / opaque), never
+  // skipped. Prior code matched only `bytes`/`bytes32`, leaving `bytes20` &c blind.
+  if (t === "bytes" || /^bytes(3[0-2]|[12]\d|[1-9])$/.test(t)) {
     out.push({ path, kind: "bytes", value });
     return;
   }
-  if (t === "bytes[]") {
-    out.push({ path, kind: "recurse", value });
-    return;
-  }
+
   if (t === "tuple") {
     const comps = (param as { components?: readonly AbiParameter[] }).components ?? [];
     for (const c of comps) {
@@ -350,21 +383,19 @@ function walkParam(param: AbiParameter, value: unknown, path: string, out: Leaf[
     }
     return;
   }
-  if (t === "tuple[]") {
-    const comps = (param as { components?: readonly AbiParameter[] }).components ?? [];
-    if (Array.isArray(value)) {
-      value.forEach((el, idx) => {
-        for (const c of comps) {
-          const cv = el && typeof el === "object" ? (el as Record<string, unknown>)[c.name ?? ""] : undefined;
-          walkParam(c, cv, `${path}[${idx}].${c.name}`, out);
-        }
-      });
-    } else {
-      for (const c of comps) walkParam(c, undefined, `${path}.${c.name}`, out);
-    }
-    return;
-  }
-  // scalar non-address (uint/int/bool/string/…) — not an authorization surface.
+
+  // Non-authorization value scalars — `uint*` / `int*` / `bool` / `string` cannot
+  // carry an address or opaque bytes, so they contribute no leaf. Now an explicit
+  // allowlist rather than a silent catch-all fall-through, so that anything NOT on
+  // it reaches the terminal refuse below instead of being ignored.
+  if (/^(u?int\d+|bool|string)$/.test(t)) return;
+
+  // Terminal: any ABI type the walker cannot categorize (a `function` selector-
+  // type, or a malformed/future type string) emits an `unhandled` leaf that has
+  // no SPEC bucket — so the boot enumeration (`assertClassificationComplete`)
+  // THROWS on it. A new recognized ABI carrying an un-anticipated type shape
+  // "won't boot" rather than shipping a blind, ungated argument (design F1).
+  out.push({ path, kind: "unhandled", value });
 }
 
 /** Every address / opaque-bytes leaf of a function's inputs (with values if given). */
