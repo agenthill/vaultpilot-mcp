@@ -73,6 +73,8 @@ A hand-seeded classification map rots the moment a new ABI or a new selector on 
 
 **Scope note: the enumerator keys on ABIs; the destination-recognition set keys on CONTRACTS.** These are different domains — `classifyDestination` recognizes a destination by its `to` address (a `CONTRACTS`-keyed lookup) and attaches an ABI to it; the enumerator walks the recognized *ABIs* directly. Keeping the two domains distinct in the design's own vocabulary matters for DEV: an enumerator that silently drifted to iterate a separately-maintained ABI list, rather than the exact set `classifyDestination` attaches per contract, would reopen a rot path this section exists to close.
 
+**The enumerator's ABI iteration domain must be DERIVED from `classifyDestination` itself, not a separately hand-maintained list — this complements, not replaces, the scope note above.** `classifyDestination` (`pre-sign-check.ts:104-190`) and block 5's kind→selector switch already define, per destination kind, exactly which ABI is recognized. The enumerator must walk that same computed set, not a second array the enumerator owns independently. A separately hand-listed enumerator domain is itself a rot vector structurally identical to the one this section exists to close: a future PR adds a new kind + ABI to `classifyDestination` (and to block 5's switch) without remembering to add the same ABI to the enumerator's own separate list — the server boots clean, the new kind's arguments are never enumerated, and the "won't boot on an unclassified path" guarantee never fires, because the new ABI was never in the enumerator's domain to begin with. This reopens the #757 failure mode one level up from where D2-rot was built to close it. **Boot falsifier:** assert the enumerator's ABI domain is set-equal to the ABI set `classifyDestination`/block 5 actually recognize; fail boot if they diverge in either direction (an ABI present in one set but not the other).
+
 Five scoping/state corrections, all load-bearing for the enumerator to be buildable and complete:
 
 - **Scope to state-mutating function inputs only — a semantics exclusion, not a volume-management shortcut.** Restrict enumeration to `stateMutability ∈ {nonpayable, payable}` function **inputs**; exclude `view`/`pure` functions and all address-typed **outputs** (e.g. Comet `getAssetInfo`'s output, Aave `getUserAccountData`'s output tuple, Uniswap `positions()` outputs, ERC-20 `balanceOf`/`allowance` reads). The reason is not that walking read-only surface is impractically large — it is that a read-only address categorically has no home in ANY of the four buckets (it is not a recipient, not an authority, not user-directed; it is not writable state at all), so including it would fail boot BY CONSTRUCTION on every single one, not as a matter of degree. Scoping to state-mutating inputs is a semantic exclusion of a category that cannot be classified, not a shortcut to keep the list short.
@@ -89,12 +91,14 @@ The **wallet-only** hard gate (non-ack-bypassable — see D4) applies only to **
 
 - Aave `withdraw.to`
 - Morpho `withdraw`/`borrow`/`withdrawCollateral.receiver`
-- Uniswap tuple `mint`/`collect`/`exactInput`/`exactOutput.recipient`, `unwrapWETH9.recipient` (**not** `sweepToken` — absent from `swapRouter02Abi`, so unreachable by decode; already refused via D7's absent-selector-throw rule, not by being on this list)
+- Uniswap tuple `exactInput`/`exactOutput.recipient` (swap-class), `unwrapWETH9.recipient` (**not** `sweepToken` — absent from `swapRouter02Abi`, so unreachable by decode; already refused via D7's absent-selector-throw rule, not by being on this list)
 - Lido `requestWithdrawals.owner`
 - Permit2 `transferFrom.to` and batch `.to[]`
 - ERC-4626 `deposit`/`mint`/`withdraw`/`redeem.receiver`
 - Self-funded-credit arguments: Aave `supply.onBehalfOf`, Morpho `supply`/`supplyCollateral.onBehalf` — these are real drains (an attacker-controlled `onBehalf` deposits the user's funds into the attacker's position, withdrawable later by the attacker) even though the *transfer* direction is inbound, because the position/aToken lands at the named address, not the caller.
 - **Aave `repay.onBehalfOf`, Morpho `repay.onBehalf` (moved from D2's bucket 1 — see D2's corrected stated test).** A repay call spends the CALLER's own tokens to reduce a THIRD PARTY's debt; setting the argument to an attacker's address pays down the attacker's obligation using the victim's funds — the mirror-image drain of the self-funded-credit row above, on the repayment side rather than the deposit side.
+
+**Also dropped from the hard gate: Uniswap `mint.recipient` and `collect.recipient` — moved to bucket 4 (USER_DIRECTED_RECIPIENT), not hard-gated.** These are user-choosable on the LIVE standalone tools: `prepare_uniswap_v3_mint` and `prepare_uniswap_v3_collect` (`src/index.ts:4613/4631/4679`) build `recipient = p.recipient ?? p.wallet` (`lp/uniswap-v3/actions.ts:190,827`) — a user legitimately mints an LP position, or collects fees, to a fresh address they name, exactly as with `erc20 transfer.to`. Hard-gating them wallet-only would refuse that legitimate flow; a prior revision's "prepare_* sets recipient=wallet by construction" premise did not hold for these two. They inherit bucket 4's full mechanism, not an unconditional pass: governed by the resolver+device-render defense, AND conditioned on the absence of a server-populated provenance stamp (same as `transfer.to`, above) — a `prepare_custom_call` call to Uniswap's position manager stamping `acknowledgedNonProtocolTarget` on a `mint`/`collect` with a non-wallet recipient does NOT qualify for bucket 4's pass-through and is evaluated as hard-gated instead, closing the same #757-shaped exploit on this protocol. The REBALANCE-multicall path (`lp/uniswap-v3/actions.ts:1120,1175`), which hardcodes `recipient=wallet`, is unaffected — it continues to pass under D7's universal-per-leg rule regardless of which bucket `mint`/`collect.recipient` resolves to, because that flow's recipient is the wallet either way.
 
 **Dropped from the hard gate: ERC-20/native `transfer`/send.** A hard refusal on `prepare_token_send` to a fresh, unsaved address contradicts the tool's entire purpose — sending to an address the user names for the first time is the normal case, and block 1 already lets a **native** send to any address through on the strength of the on-device recipient display alone; refusing the equivalent ERC-20 `transfer` at this gate is an inconsistency the pre-sign layer cannot resolve on calldata alone (that distinguishing signal — which tool built the call, and what the user was shown — lives above this gate).
 
@@ -173,19 +177,20 @@ The #741-family prepare-time custom-call classifier and this pre-sign gate must 
 |---|---|---|
 | Aave `withdraw.to` | `to != wallet` | `to == wallet` |
 | Morpho `withdraw`/`borrow.receiver` (tuple) | same | same |
-| Uniswap `collect`/`mint`/`exactInputSingle.recipient` (tuple) | same | same |
+| Uniswap `exactInputSingle`/`exactOutputSingle.recipient` (tuple, swap-class) | same | same |
 | Lido `requestWithdrawals.owner` | same | same |
 | Permit2 `transferFrom.to` + batch `.to[]` | same | same |
 | ERC-4626 `deposit`/`mint`/`withdraw`/`redeem.receiver` | same | same |
 | Aave/Morpho `supply`/`supplyCollateral.onBehalf(Of)` | same | same |
 | Aave/Morpho `repay.onBehalf(Of)` (hard-gated, see D3) | same | same |
 | LiFi `_receiver` (extractable routes) | same | same |
-| `custom_call` `transfer.to` carrying a provenance stamp (D3) | stamp present and `to != wallet` | stamp present and `to == wallet` (an UNstamped `transfer.to` is bucket 4, not this row — see over-block negatives) |
+| `custom_call` bucket-4 argument carrying a provenance stamp (`transfer.to`, Uniswap `mint`/`collect.recipient` — D3) | stamp present and `to != wallet` | stamp present and `to == wallet` (an UNstamped bucket-4 argument is bucket 4's normal pass-through, not this row — see over-block negatives) |
 
 **Over-block negatives (must be present as tests, not just asserted):**
 
 - `prepare_token_send` → a fresh, never-saved, unstamped literal address → PASSES.
 - `prepare_token_send` → an ENS name resolving to a non-contact address, unstamped → PASSES.
+- `prepare_uniswap_v3_mint`/`prepare_uniswap_v3_collect` → `recipient` set to a fresh address, not `p.wallet`, unstamped → PASSES (D-4 fix — these are live standalone tools exposing `recipient` as user-choosable; hard-gating them wallet-only regressed a legitimate flow).
 - Native-out swap `multicall([exactInputSingle(tokenOut=weth, recipient=router), unwrapWETH9(amountMinimum>0, wallet)])` → PASSES.
 - A normal Morpho `supply` call (exercising all four `marketParams.*` addresses) → PASSES.
 - `prepare_weth_unwrap` (a selector present only in block 5's `ERC20 ∪ wethAbi` union, not the narrower curated `allowedAbi`) → PASSES, proving the decode source is the block-5 union, not the narrower curated ABI (D1).
@@ -247,6 +252,7 @@ Falsifiers: (i) swap the connected-account set between `preview_send` and `send_
 Risks named here are known, accepted, or deferred-with-reason — recorded so the design's actual coverage boundary is legible, not because any one of them individually blocks #759:
 
 - **`prepare_token_send(to=ATTACKER)` is device-render-only** (D3) — the accepted usability trade-off of dropping the hard gate on user-directed transfers; no cryptographic or provenance backstop exists at this seam for that call shape.
+- **Uniswap `mint`/`collect.recipient` is user-directed, defended by on-device render only — same residual class as `transfer.to`** (D3) — `prepare_uniswap_v3_mint`/`_collect` let the user name a fresh recipient, so this bucket-4 argument carries the same accepted residual as `prepare_token_send`: no cryptographic or provenance backstop beyond the device render, for calls that carry no `acknowledgedNonProtocolTarget` stamp.
 - **The asset dimension** (D9) — this gate authorizes the recipient address, never the asset or its price; a bad-asset/bad-price drain at an honest address is untouched by this design and is the swap-tooling's job, not this seam's.
 - **EigenLayer `strategy` and Morpho `marketParams.oracle` sit in the NON_RECIPIENT_ALLOWLIST (D2 bucket 1) on an external, unverified premise** — that the named strategy/oracle contract is itself legitimate infrastructure, not attacker-deployed. This design does not independently verify that premise; it is recorded as an external dependency, not gated on a durable-binding check here (repo CLAUDE.md Inv #15, durable-binding to a verified candidate, is the pattern that would close this if adopted for these arguments in a future revision).
 - **Multicall breadth** (D7 property 4) — the total decoded-sub-call budget bounds cost and recursion, but the specific budget value is an implementation constant this doc does not fix; DEV sets it against real multicall shapes the MCP's own tools produce.
