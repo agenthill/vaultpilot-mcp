@@ -50,6 +50,18 @@ export const prepareCurveAddLiquidityInput = z.object({
     .describe(
       "Server-side slippage allowance in basis points (e.g. 50 = 0.5%). When set, `minLpOut = calc_token_amount * (1 - slippageBps / 10000)`. Capped at 10% (1000 bps) to prevent accidental wide gates. Either `minLpOut` or `slippageBps` is required.",
     ),
+  acknowledgeNonAllowlistedSpender: z
+    .literal(true)
+    .optional()
+    .describe(
+      "AFFIRMATIVE GATE — required whenever a deposit slot is non-zero (each approve leg targets the Curve pool, which is NOT in the " +
+        "global protocol approve-allowlist: Aave Pool, Compound Comet, Morpho Blue, Lido Queue, EigenLayer, Uniswap NPM, Uniswap " +
+        "SwapRouter02, LiFi Diamond). The allowlist is a security recommendation, not a hard requirement: it limits approvals to a " +
+        "small set of well-known spenders to keep prompt-injection drains from sliding through. Setting this flag is the user's " +
+        "affirmative ack that they understand the approval target sits outside that curated set — the on-device clear-sign of " +
+        "`approve(<curve-pool>, <amount>)` and the prepare-receipt warning advisory are the verification anchors. Do NOT default " +
+        "this to true silently; surface the trade-off to the user first. Mirrors `prepare_curve_swap`'s identically-named gate.",
+    ),
   approvalCap: approvalCapSchema.optional(),
 });
 export type PrepareCurveAddLiquidityArgs = z.infer<

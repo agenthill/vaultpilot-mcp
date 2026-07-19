@@ -81,7 +81,13 @@ export async function buildCurveAddLiquidity(
   const factory = CONTRACTS.ethereum.curve.stableNgFactory as Address;
   const client = getClient("ethereum");
 
-  // Read pool metadata + N_COINS in one multicall.
+  // Read the pool's trust anchors from the stable_ng FACTORY (not the
+  // pool itself): is_meta, get_n_coins (>0 iff the factory registered the
+  // pool), and get_coins. Reading `N_COINS` off the pool would trust an
+  // attacker-controllable self-report — the destination is later stamped
+  // `acknowledgedNonProtocolTarget`, which bypasses the pre-sign block-4
+  // catch-all, so the pool MUST be validated against the factory the same
+  // way `buildCurveSwap`/`ensureSupportedCurvePool` does. Issue #734.
   const [isMetaR, nCoinsR, coinsR] = await client.multicall({
     contracts: [
       {
@@ -91,9 +97,10 @@ export async function buildCurveAddLiquidity(
         args: [pool],
       },
       {
-        address: pool,
-        abi: curveStableNgPlainPoolAbi,
-        functionName: "N_COINS",
+        address: factory,
+        abi: curveStableNgFactoryAbi,
+        functionName: "get_n_coins",
+        args: [pool],
       },
       {
         address: factory,
@@ -105,12 +112,25 @@ export async function buildCurveAddLiquidity(
     allowFailure: false,
   });
 
+  // Factory registration reject — the same trust anchor `buildCurveSwap`
+  // uses. An unregistered / attacker-supplied address returns get_n_coins
+  // == 0 (and is_meta == false), so without this it would sail through on
+  // its self-reported N_COINS. Reject BEFORE the pool is trusted anywhere.
+  const nCoins = Number(nCoinsR as bigint);
+  if (nCoins === 0) {
+    throw new Error(
+      `Pool ${pool} is not registered with the Curve stable_ng factory ` +
+        `(${factory}) — get_n_coins returned 0. prepare_curve_add_liquidity ` +
+        `only supports stable_ng plain pools; an unregistered address is refused ` +
+        `so the pre-sign gate never trusts an attacker-supplied add_liquidity ` +
+        `destination. Use \`get_curve_positions\` to discover valid pools.`,
+    );
+  }
   if (isMetaR === true) {
     throw new Error(
       `Curve pool ${pool} is a meta pool. v0.1 only supports plain stable_ng pools — meta-pool support tracked as a follow-up. Use a plain pool's address (call \`get_curve_positions\` to discover them).`,
     );
   }
-  const nCoins = Number(nCoinsR as bigint);
   if (p.amounts.length !== nCoins) {
     throw new Error(
       `Pool ${pool} has N_COINS=${nCoins}, but ${p.amounts.length} amounts were provided. Pad with '0' for slots you're not depositing into.`,
@@ -172,6 +192,34 @@ export async function buildCurveAddLiquidity(
       spenderLabel: `Curve stable_ng plain pool ${pool}`,
     });
     if (a !== null) {
+      // The pool is NOT in the global protocol approve-allowlist (Aave /
+      // Compound / Morpho / Lido Queue / EigenLayer / Uniswap NPM+Router /
+      // LiFi). Mirror `buildCurveSwap` exactly: require the caller's
+      // affirmative opt-in BEFORE stamping the block-2 spender-allowlist
+      // skip — never auto-ack silently. The allowlist is a security
+      // recommendation, not a hard requirement (#618). Issue #734.
+      if (p.acknowledgeNonAllowlistedSpender !== true) {
+        throw new Error(
+          `prepare_curve_add_liquidity builds an approve to a Curve stable_ng plain pool (${pool}), which is NOT ` +
+            `in the protocol approve-allowlist (Aave Pool, Compound Comet, Morpho Blue, Lido Queue, EigenLayer, ` +
+            `Uniswap NPM, Uniswap SwapRouter02, LiFi Diamond). The allowlist is a security recommendation: it limits ` +
+            `approvals to a small set of well-known spenders to keep prompt-injection drains from sliding through. ` +
+            `Curve pools are well-vetted but sit outside that curated set. Surface the trade-off to the user, then ` +
+            `retry with \`acknowledgeNonAllowlistedSpender: true\` to opt in.`,
+        );
+      }
+      // Stamp the affirmative-ack on every leg of this approval sub-chain
+      // (a plain approve, or a reset→approve for USDT-style coins) so
+      // `assertTransactionSafe` skips its block-2 spender-allowlist refusal.
+      for (let leg: UnsignedTx | undefined = a; leg; leg = leg.next) {
+        leg.acknowledgedNonAllowlistedSpender = true;
+      }
+      // Surface the advisory on the approval receipt so the agent tells the
+      // user the spender is non-allowlisted (mirror `buildCurveSwap`).
+      a.description =
+        `${a.description} ⚠ ADVISORY: spender is a Curve stable_ng plain pool, NOT in the ` +
+        `protocol approve-allowlist; user opted in via acknowledgeNonAllowlistedSpender. ` +
+        `Verify the on-device approve target matches ${pool}.`;
       chainedApproval = chainedApproval === null ? a : chainApproval(chainedApproval, a);
     }
   }
@@ -192,6 +240,15 @@ export async function buildCurveAddLiquidity(
         ...(p.slippageBps !== undefined ? { slippageBps: String(p.slippageBps) } : {}),
       },
     },
+    // Curve pool addresses are dynamic (stable_ng factory) so they can never
+    // appear in `classifyDestination`'s recognized set — without an ack,
+    // `assertTransactionSafe`'s block-4 catch-all refuses the add_liquidity
+    // leg at preview/send. Mirror `buildCurveSwap` (#626): the destination-
+    // trust source is the FACTORY registration check above — get_n_coins > 0
+    // on the stable_ng factory, the same anchor `ensureSupportedCurvePool`
+    // uses. An unregistered / attacker pool is rejected before this point,
+    // so the ack never launders an untrusted destination. Issue #734.
+    acknowledgedNonProtocolTarget: true,
   };
 
   return chainedApproval === null ? addTx : chainApproval(chainedApproval, addTx);

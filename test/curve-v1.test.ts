@@ -196,7 +196,8 @@ describe("buildCurveAddLiquidity", () => {
       multicall: vi.fn(async ({ contracts }: { contracts: MulticallCall[] }) => {
         const fns = contracts.map((c) => c.functionName);
         if (fns.includes("is_meta")) {
-          // is_meta + N_COINS + get_coins
+          // is_meta + get_n_coins + get_coins (all read off the stable_ng
+          // factory; get_n_coins=2 == a registered plain pool).
           return [
             false,
             2n,
@@ -309,6 +310,9 @@ describe("buildCurveAddLiquidity", () => {
       pool: POOL_A,
       amounts: ["1000000", "2000000"],
       slippageBps: 100, // 1%
+      // Approvals are built (allowance 0) → the non-allowlisted-spender
+      // opt-in is now required (mirrors curve_swap; no silent auto-ack).
+      acknowledgeNonAllowlistedSpender: true,
     });
     // chainApproval returns the approval tx with `next` pointing at the action.
     // Selector for add_liquidity(uint256[],uint256) is 0x0b4c7e4d (verified
@@ -325,6 +329,29 @@ describe("buildCurveAddLiquidity", () => {
     expect(cur.decoded?.functionName).toBe("add_liquidity");
     expect(cur.to).toBe(POOL_A);
     expect(cur.decoded?.args.minLpOut).toBe("1485000"); // 1_500_000 * (1 - 0.01)
+    // ⚠ ADVISORY rides the approval receipt (mirror curve_swap).
+    expect(tx.description).toMatch(/⚠ ADVISORY/);
+    expect(tx.acknowledgedNonAllowlistedSpender).toBe(true);
+  });
+
+  it("refuses to build the approve when acknowledgeNonAllowlistedSpender is unset (mirror curve_swap; no silent auto-ack)", async () => {
+    const mockClient = plainPoolClient({ calcOut: 1_500_000n, allowance: 0n });
+    vi.doMock("../src/data/rpc.js", () => ({ getClient: () => mockClient }));
+    vi.doMock("../src/modules/shared/token-meta.js", () => ({
+      resolveTokenMeta: async () => ({ symbol: "USDC", decimals: 6 }),
+    }));
+
+    const { buildCurveAddLiquidity } = await import(
+      "../src/modules/curve/actions.js"
+    );
+    await expect(
+      buildCurveAddLiquidity({
+        wallet: WALLET,
+        pool: POOL_A,
+        amounts: ["1000000", "2000000"],
+        slippageBps: 100,
+      }),
+    ).rejects.toThrow(/acknowledgeNonAllowlistedSpender|approve-allowlist|recommendation/i);
   });
 });
 
