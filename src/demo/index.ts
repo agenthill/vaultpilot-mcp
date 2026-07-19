@@ -414,6 +414,20 @@ const ALWAYS_GATED_EXPLICIT = new Set([
   // safe `broadcast: false` branch at dispatch time (the dispatcher sees only
   // the tool name, not the args). Issue #772.
   "finalize_btc_psbt",
+  // prepare_btc_multisig_send is a combined prepare+SIGN tool: its handler
+  // calls `signBitcoinMultisigPsbt` → Ledger `app.signPsbt` (multisig.ts:1043)
+  // UNCONDITIONALLY. The `prepare_` prefix would otherwise only CONDITIONALLY
+  // gate it, and every conditionally-gated tool except the broadcast tool runs
+  // the REAL handler in live demo (prepare_* auto-selects the whale persona) —
+  // so a demo user with a paired Ledger + a registered multisig wallet + UTXOs
+  // would get a REAL device signature. It signs unconditionally, so gating it
+  // loses no inspection-only demo UX. Same fund-safety fail-open class as
+  // finalize_btc_psbt / sign_btc_multisig_psbt above — the 3rd sink-reacher
+  // surfaced by the structural sink-gating check. Issue #772. Explicit rather
+  // than a prefix broadening because `prepare_*` is the conditional-gate
+  // prefix; listing the one signing prepare_ tool keeps every other prepare_*
+  // on its inspection-only conditional path.
+  "prepare_btc_multisig_send",
 ]);
 
 /**

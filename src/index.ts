@@ -3917,7 +3917,10 @@ async function main() {
         "`broadcast: true` to send via the configured indexer in the same call — " +
         "returns `broadcastedTxid` on success. Pass `broadcast: false` (default) " +
         "when the caller wants to inspect the hex first or broadcast through a " +
-        "different relay. No device touch.",
+        "different relay. No device touch. In demo mode this tool is refused " +
+        "ENTIRELY — even the safe `broadcast: false` combine-only branch — because " +
+        "demo gating is name-based (the dispatcher sees only the tool name, not the " +
+        "args) and the `broadcast: true` path is a real mainnet broadcast.",
       inputSchema: finalizeBitcoinPsbtInput.shape,
       annotations: {
         title: "Finalize BTC PSBT",

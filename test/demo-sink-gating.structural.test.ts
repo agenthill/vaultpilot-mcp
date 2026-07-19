@@ -41,22 +41,21 @@ function contained(name: string): boolean {
 }
 
 /**
- * Sink-reaching tools that are NOT yet contained but are OUT OF SCOPE for
- * #772 (SEC named exactly two). Each is a real demo-mode signing/broadcast
- * hole of the SAME class, quarantined here with a tracking note rather than
- * silently passed. The staleness guard below forces an entry to be removed
- * the moment it becomes contained, so this can never rot into a silent
- * permanent bypass.
+ * Sink-reaching tools that are NOT yet contained but are quarantined here
+ * with a tracking note rather than silently passed. The staleness guard below
+ * forces an entry to be removed the moment it becomes contained, so this can
+ * never rot into a silent permanent bypass.
+ *
+ * EMPTY as of the #772 rework: `prepare_btc_multisig_send` — the 3rd
+ * sink-reacher this structural check surfaced (a combined prepare+SIGN tool
+ * whose handler calls `signBitcoinMultisigPsbt` → Ledger `app.signPsbt`
+ * unconditionally) — was gated fail-closed (added to `ALWAYS_GATED_EXPLICIT`)
+ * rather than allowlisted, so the "every sink-reaching tool is contained"
+ * invariant below now guards it directly. No known-uncontained sink-reachers
+ * of this class remain. Keep the set (and its self-cleaning staleness guard)
+ * so any future escapee is quarantined loudly, never blessed.
  */
-const KNOWN_UNCONTAINED_OUT_OF_SCOPE = new Set<string>([
-  // prepare_btc_multisig_send is a combined prepare+SIGN tool: its handler
-  // calls signBitcoinMultisigPsbt → Ledger `app.signPsbt` (multisig.ts:1043).
-  // prepare_* runs the REAL handler in live demo (auto-whale), so a demo
-  // user with a Ledger + a registered multisig wallet + UTXOs would get a
-  // REAL device signature. Same class as #772; needs its own gating decision
-  // (surfaced for follow-up — NOT changed in this PR per its scope).
-  "prepare_btc_multisig_send",
-]);
+const KNOWN_UNCONTAINED_OUT_OF_SCOPE = new Set<string>([]);
 
 describe("issue #772 — structural sink-gating binding", () => {
   it("discovers a non-trivial number of registered tools (sanity)", () => {
@@ -89,6 +88,16 @@ describe("issue #772 — structural sink-gating binding", () => {
     expect(contained("finalize_btc_psbt")).toBe(true);
     expect(isAlwaysGatedTool("sign_btc_multisig_psbt")).toBe(true);
     expect(isAlwaysGatedTool("finalize_btc_psbt")).toBe(true);
+  });
+
+  it("prepare_btc_multisig_send (the 3rd sink-reacher) is sink-reaching AND now contained", () => {
+    // This tool was previously quarantined in KNOWN_UNCONTAINED_OUT_OF_SCOPE;
+    // the #772 rework gated it (ALWAYS_GATED_EXPLICIT). Assert both halves so a
+    // regression that either stops detecting the sink OR drops the gate goes RED.
+    const prep = byName.get("prepare_btc_multisig_send");
+    expect(prep?.sinkReaching, `prepare_btc_multisig_send path: ${JSON.stringify(prep?.sinkPath)}`).toBe(true);
+    expect(contained("prepare_btc_multisig_send")).toBe(true);
+    expect(isAlwaysGatedTool("prepare_btc_multisig_send")).toBe(true);
   });
 
   it("every sink-reaching tool is contained in demo mode (the security invariant)", () => {
