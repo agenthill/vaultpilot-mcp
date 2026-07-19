@@ -161,6 +161,44 @@ interface StoredSolanaTx {
 
 const store = new Map<string, StoredSolanaTx>();
 
+/**
+ * Recursively `Object.freeze` `value` and every plain-object/array it
+ * reaches, so a later mutation on the object `consumeSolanaHandle` hands
+ * back throws instead of silently sticking. Sibling of `tx-store.ts`'s
+ * `deepFreeze` (issue #710/#730). Issue #742 — sweep the freeze across
+ * every chain-specific tx-store.
+ *
+ * Applied lazily in `consumeSolanaHandle`, NOT inside `pinSolanaHandle`
+ * itself — `previewSolanaSend` (execution/index.ts) legitimately mutates
+ * `pinned.simulation = sim` in place on the very object `pinSolanaHandle`
+ * returns, AFTER pinning, once the pre-sign simulation RPC resolves.
+ * Freezing at pin time would make that assignment throw and break every
+ * non-`nonce_init` preview. `consumeSolanaHandle` is only ever called from
+ * the send path, strictly after `previewSolanaSend` has run to completion,
+ * so freezing there closes the TOCTOU gap for the actual external-facing
+ * read (`send_transaction`) without touching the legitimate internal
+ * simulation-attach step.
+ *
+ * `entry.draft` is left unfrozen entirely: `previewSolanaSend` also
+ * mutates `draft.meta.nonce.value` in place (via the reference
+ * `getSolanaDraft` hands back) to refresh a durable nonce before
+ * re-pinning, and the legacy-kind pin path mutates
+ * `draft.draftTx.recentBlockhash` in place too. `draft` is this store's
+ * analog of #730's "wrapper carries mutable metadata" — pre-finalization
+ * working state that must stay writable, not the stored tx value itself.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return value;
+  }
+  if (Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
+
 function prune(now = Date.now()): void {
   for (const [handle, entry] of store) {
     if (entry.expiresAt < now) store.delete(handle);
@@ -305,8 +343,13 @@ export function pinSolanaHandle(
   };
   const verification = buildSolanaVerification(pinnedBase);
   const pinned: UnsignedSolanaTx = { ...pinnedBase, verification };
+  // NOT frozen here — `previewSolanaSend` still needs to write
+  // `pinned.simulation = sim` on this exact object after the pre-sign
+  // simulation RPC resolves. See the `deepFreeze` doc comment above:
+  // the freeze happens lazily in `consumeSolanaHandle`, once the tx is
+  // truly done being built.
   entry.pinned = pinned;
-  return pinned;
+  return entry.pinned;
 }
 
 /**
@@ -332,6 +375,16 @@ export function consumeSolanaHandle(handle: string): UnsignedSolanaTx {
         `for the user to match on-device. send_transaction cannot run without a pin.`,
     );
   }
+  // Deep-freeze on first consume (issue #742, sibling of #710/#730) so a
+  // mutation attempt on the object handed back here cannot alter what a
+  // later `consumeSolanaHandle` on the same handle sees. This also
+  // freezes `pinned.verification` all the way down — a future post-issue
+  // enrichment step that tries to write into it will throw in strict
+  // mode; that's a flag to route the enrichment through `pinSolanaHandle`
+  // instead of mutating the consumed tx in place. Idempotent — deepFreeze
+  // no-ops on an already-frozen value, so re-consuming the same handle is
+  // safe.
+  entry.pinned = deepFreeze(entry.pinned);
   return entry.pinned;
 }
 
