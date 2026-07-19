@@ -1118,6 +1118,29 @@ function registerTool(
   // var, tools outside the scope skip registration entirely — saving the
   // per-turn token cost of carrying their description + JSON schema.
   if (!isToolEnabled(name)) return undefined;
+  const dispatch = makeDemoDispatch(name, realHandler);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return server.registerTool(name, opts, dispatch as any);
+}
+
+/**
+ * Build the demo-mode dispatch wrapper for one tool. Extracted from
+ * `registerTool` (issue #772) so the exact production gating decision is
+ * directly drivable from a test with a spy `realHandler`: proving that in
+ * demo mode a gated tool never invokes its real handler is proving its real
+ * sink (Ledger signature / broadcast) is unreachable. Behavior is identical
+ * to the previous inline dispatch — this is a lift, not a logic change.
+ *
+ * When `VAULTPILOT_DEMO` is unset every call is a transparent pass-through
+ * to `realHandler` (the classifiers are evaluated once at registration; the
+ * hot path is a single `isDemoMode()` check).
+ */
+export function makeDemoDispatch(
+  name: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  realHandler: (args: any) => Promise<{ content: unknown[]; isError?: boolean }> | { content: unknown[]; isError?: boolean },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): (args: any) => Promise<{ content: unknown[]; isError?: boolean }> | { content: unknown[]; isError?: boolean } {
   const alwaysGated = isAlwaysGatedTool(name);
   const conditionallyGated = isConditionallyGatedTool(name);
   const broadcastTool = isBroadcastTool(name);
@@ -1136,7 +1159,7 @@ function registerTool(
   );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const dispatch = async (args: any) => {
+  return async (args: any) => {
     if (!isDemoMode()) return realHandler(args);
     if (alwaysGated) return refuseAlwaysGated(args);
     if (conditionallyGated) {
@@ -1169,8 +1192,6 @@ function registerTool(
     }
     return realHandler(args);
   };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return server.registerTool(name, opts, dispatch as any);
 }
 
 /**
