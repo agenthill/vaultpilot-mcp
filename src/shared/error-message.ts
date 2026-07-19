@@ -44,20 +44,73 @@
  *   - `/v3/<seg>` and `/v2/<seg>` path segments (the Infura/Alchemy key
  *     slot) — `<seg>` must be ≥ 8 chars to avoid clobbering short,
  *     non-secret path words like `/v2/eth`.
- *   - `api-key=` / `apikey=` query-param values.
+ *   - `api-key=` / `apikey=` query-param values (any host).
+ *   - The first path segment after a known data-provider host
+ *     (QuickNode `<name>.quiknode.pro/<token>`, Triton `rpcpool.com` /
+ *     `triton.one`, NOWNodes `nownodes.io`, GetBlock `getblock.io`) —
+ *     same ≥ 8-char floor, keyed off the PROVIDER_HOST set below so a
+ *     legitimate non-provider path word is never clobbered.
+ *   - Bare `?key=` / `?token=` / `?access_token=` query values, but ONLY
+ *     on a known provider host (NOWNodes / GetBlock / …) — a legitimate
+ *     non-provider `?token=` in unrelated text passes through untouched.
+ *   - URL userinfo — `https://user:pass@host/…` basic-auth RPC endpoints
+ *     (`src/config/btc.ts` hosted-provider basic auth). Userinfo before
+ *     the `@` in an http(s) URL is a credential by construction, so this
+ *     one is redacted on any host, not just the provider set.
  *
  * The `***` placeholder is left in place so the reader still sees that
  * a redaction happened.
+ *
+ * OVER-REDACTION is the primary risk (issue #768): the provider-keyed
+ * shapes above deliberately anchor on PROVIDER_HOST rather than a blanket
+ * "redact any path segment / any ?token=", so real 0x addresses, tx
+ * hashes, non-secret path words (`/v2/eth`), block-explorer URLs
+ * (`etherscan.io`), and non-provider query params survive verbatim.
  */
+// Known data-provider RPC host suffixes (registrable domain, subdomains
+// allowed). VaultPilot builds Infura/Alchemy/Helius URLs itself
+// (src/config/chains.ts, src/setup.ts) and documents QuickNode / Triton /
+// NOWNodes / GetBlock as user-pasted `SOLANA_RPC_URL` / `*_RPC_URL` custom
+// endpoints (src/types/index.ts, src/setup.ts, src/config/btc.ts). The
+// path-token and bare-query-key redactions below fire ONLY when a URL's host
+// matches this set — that is what keeps a legitimate non-provider `?token=`
+// or path word from being clobbered.
+const PROVIDER_HOST = String.raw`(?:[A-Za-z0-9-]+\.)*(?:quiknode\.pro|rpcpool\.com|triton\.one|nownodes\.io|getblock\.io|helius-rpc\.com|infura\.io|alchemy\.com)`;
+// URL scheme + OPTIONAL userinfo, so a provider URL that ALSO carries basic
+// auth (`https://user:pass@host/<token>`) still anchors on the host whether
+// the userinfo pattern has already run or not (order-independent redaction).
+const URL_PREFIX = String.raw`https?:\/\/(?:[^/@\s]+@)?`;
+
 // Provider-shape-specific, NOT a general secret scrubber: these patterns match
-// the exact URL shapes VaultPilot configures keys into (Infura/Alchemy path
-// segment, `api-key` query param). A token embedded any other way is not
-// covered — widen deliberately if a new provider adds a new shape.
+// the exact URL shapes VaultPilot configures keys into. A token embedded any
+// other way is not covered — widen deliberately if a new provider adds a new
+// shape.
 const API_KEY_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // Infura `/v3/<key>` and Alchemy `/v2/<key>` path segments.
   [/(\/v[23]\/)[A-Za-z0-9_-]{8,}/g, "$1***"],
   // `api-key=<key>` / `apikey=<key>` query params (any host).
   [/([?&](?:api-?key)=)[^&#\s"')\]]+/gi, "$1***"],
+  // QuickNode / Triton / NOWNodes / GetBlock path token — the credential is
+  // the first path segment after a KNOWN provider host
+  // (`https://<name>.quiknode.pro/<token>/`). Reuses the ≥8-char floor so a
+  // short non-secret path word (`/health`) survives.
+  [
+    new RegExp(String.raw`(${URL_PREFIX}${PROVIDER_HOST}(?::\d+)?\/)[A-Za-z0-9_-]{8,}`, "gi"),
+    "$1***",
+  ],
+  // Bare `?key=` / `?token=` / `?access_token=` on a KNOWN provider host —
+  // the `api-key`/`apikey` pattern above misses these param names. Host-keyed
+  // so a legitimate non-provider `?token=` is NOT clobbered.
+  [
+    new RegExp(
+      String.raw`(${URL_PREFIX}${PROVIDER_HOST}(?::\d+)?[^\s"')\]]*?[?&](?:access_token|token|key)=)[^&#\s"')\]]+`,
+      "gi",
+    ),
+    "$1***",
+  ],
+  // URL userinfo — `https://user:pass@host/…`. Redacted on ANY host: userinfo
+  // before the `@` in an http(s) URL is a credential by construction.
+  [new RegExp(String.raw`(https?:\/\/)[^/?#\s@]+@`, "gi"), "$1***@"],
 ];
 
 export function redactSecrets(str: string): string {
@@ -104,22 +157,51 @@ export function safeErrorMessage(error: unknown): string {
  * so the mutation is local. Idempotent — re-redacting an already-safe block
  * is a no-op (`***` matches no key pattern), so wrapping a clean preview/send
  * payload (tx hashes, addresses, amounts) leaves it untouched.
+ *
+ * Non-text blocks (issue #768 part C): every MCP block VaultPilot emits today
+ * is `{ type: 'text' }`, but the MCP block union also has resource /
+ * resource_link / image / audio shapes that carry credential-bearing strings
+ * in OTHER fields (`resource.uri`, `resource.text`, `resource_link.uri`).
+ * Rather than assume text-only forever, we DEFENSIVELY redact every string
+ * field of every block, recursing through nested objects/arrays. Base64
+ * payload fields (`data` / `blob` on image/audio/resource blocks) are SKIPPED:
+ * a provider key is never base64-embedded there, and running `redactSecrets`
+ * over a binary blob could corrupt a legitimate payload. This preserves the
+ * existing `text`-block behavior exactly (a `text` string is still redacted)
+ * while closing the non-text gap by construction.
  */
 export function redactResponseContent<T extends { content: unknown[] }>(
   response: T,
 ): T {
   for (const block of response.content) {
-    if (
-      block !== null &&
-      typeof block === "object" &&
-      "text" in block &&
-      typeof (block as { text: unknown }).text === "string"
-    ) {
-      const b = block as { text: string };
-      b.text = redactSecrets(b.text);
-    }
+    redactStringsInPlace(block, 0);
   }
   return response;
+}
+
+/**
+ * Redact every string reachable inside a content block, mutating in place.
+ * Skips `data` / `blob` keys (base64 image/audio/resource payloads — never a
+ * key carrier, and redaction could corrupt binary). Depth-bounded to guard
+ * against a pathological/cyclic block shape; MCP blocks are shallow.
+ */
+function redactStringsInPlace(value: unknown, depth: number): void {
+  if (value === null || typeof value !== "object" || depth > 4) return;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const el = value[i];
+      if (typeof el === "string") value[i] = redactSecrets(el);
+      else redactStringsInPlace(el, depth + 1);
+    }
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (key === "data" || key === "blob") continue;
+    const v = obj[key];
+    if (typeof v === "string") obj[key] = redactSecrets(v);
+    else redactStringsInPlace(v, depth + 1);
+  }
 }
 
 function safeErrorMessageRaw(error: unknown): string {
