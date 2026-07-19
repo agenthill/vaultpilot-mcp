@@ -55,6 +55,13 @@ describe("mevExposureNote", () => {
   });
 
   it("fires for slippages just above the threshold", () => {
-    expect(mevExposureNote("ethereum", 51, 1000)).toBeDefined();
+    // 51 bps is one bp over the 50-bps threshold: the exact-threshold call is
+    // a no-op, one bp above must fire AND carry the near-threshold content.
+    expect(mevExposureNote("ethereum", 50, 1000)).toBeUndefined();
+    const note = mevExposureNote("ethereum", 51, 1000);
+    // 1000 * (51 / 10_000) = 5.10
+    expect(note).toMatch(/up to ~\$5\.10 extractable via sandwich/);
+    expect(note).toMatch(/0\.51% slippage on Ethereum mainnet/);
+    expect(note).toMatch(/lowering slippage or splitting/);
   });
 });

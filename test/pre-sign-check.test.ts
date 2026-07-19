@@ -4,27 +4,13 @@
  * prepare_* tools legitimately emit and reject anything unknown, especially
  * approve() to a spender that isn't on our protocol allowlist.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { encodeFunctionData, maxUint256, zeroAddress } from "viem";
 import { erc20Abi } from "../src/abis/erc20.js";
 
-// Mock the RPC layer so classifyDestination's getAavePoolAddress read doesn't
-// try to hit a real node. The mock returns whatever we put on readContractMock.
-const { readContractMock } = vi.hoisted(() => ({ readContractMock: vi.fn() }));
-
-vi.mock("../src/data/rpc.js", () => ({
-  getClient: () => ({
-    readContract: readContractMock,
-    multicall: vi.fn(),
-    getChainId: vi.fn(),
-  }),
-  verifyChainId: vi.fn().mockResolvedValue(undefined),
-  resetClients: vi.fn(),
-}));
-
-// Aave V3 Pool on Ethereum (canonical). We have classifyDestination compute
-// this via readContract, so the mock just returns this every time — any tx
-// whose `to` equals AAVE_POOL_ETH is treated as hitting the Pool.
+// Aave V3 Pool on Ethereum (canonical). classifyDestination pins this address
+// from CONTRACTS — no RPC read — so any tx whose `to` equals AAVE_POOL_ETH is
+// recognized as the Pool.
 const AAVE_POOL_ETH = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
 const LIFI_DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE";
 const USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
@@ -33,11 +19,6 @@ const WETH_ETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ATTACKER = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 const WALLET = "0x1111111111111111111111111111111111111111";
 const STETH_TOKEN_ETH = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84";
-
-beforeEach(() => {
-  readContractMock.mockReset();
-  readContractMock.mockResolvedValue(AAVE_POOL_ETH);
-});
 
 describe("Pre-sign check: native sends", () => {
   it("accepts a bare native transfer with empty calldata", async () => {
