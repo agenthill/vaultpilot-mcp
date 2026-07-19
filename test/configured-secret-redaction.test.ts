@@ -17,6 +17,7 @@ import {
   setRuntimeOverride,
   _resetRuntimeRpcOverridesForTests,
 } from "../src/data/runtime-rpc-overrides.js";
+import * as runtimeOverridesModule from "../src/data/runtime-rpc-overrides.js";
 import type { UserConfig } from "../src/types/index.js";
 import * as errorMessageModule from "../src/shared/error-message.js";
 
@@ -312,6 +313,105 @@ describe("issue #771 — exact-match configured-secret scrubbing", () => {
       for (const call of warn.mock.calls) {
         expect(JSON.stringify(call)).not.toContain(secret);
       }
+    });
+  });
+
+  describe("redaction-layer error is loud, not silent (SEC C1)", () => {
+    // A fake needle embedded in the THROWN error — the whole point of C1 is that
+    // a redaction-path error could itself carry a needle, so it must never be
+    // logged. We assert it appears in no warn arg.
+    const FAKE_NEEDLE_IN_ERROR = "FAKEneedle0inside9error8message7";
+
+    it("redactConfiguredSecrets warns once (value-free) when the needle collector throws", () => {
+      const warn = vi.mocked(console.warn); // silenced spy installed in beforeEach
+      // Force collectConfiguredSecretNeedles() to throw via its one unguarded
+      // source — the runtime-override read. The thrown error deliberately embeds
+      // a fake needle so we can assert it is NEVER logged.
+      vi.spyOn(runtimeOverridesModule, "getRuntimeOverride").mockImplementation(
+        () => {
+          throw new Error(`boom ${FAKE_NEEDLE_IN_ERROR}`);
+        },
+      );
+
+      const input = "some ordinary output";
+      // Still returns the (shape-redacted) input — no throw escapes.
+      expect(redactConfiguredSecrets(input)).toBe(input);
+      redactConfiguredSecrets(input); // second call must NOT re-warn (one-time)
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      // No needle value AND no caught-error text in any warn arg.
+      for (const call of warn.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain(FAKE_NEEDLE_IN_ERROR);
+        expect(JSON.stringify(call)).not.toContain("boom");
+      }
+    });
+
+    it("redactResponseContent warns (value-free) when the needle collector throws", () => {
+      const warn = vi.mocked(console.warn);
+      vi.spyOn(runtimeOverridesModule, "getRuntimeOverride").mockImplementation(
+        () => {
+          throw new Error(`boom ${FAKE_NEEDLE_IN_ERROR}`);
+        },
+      );
+
+      // Shape patterns still run; the response is returned, not thrown.
+      const res = redactResponseContent({
+        content: [{ type: "text", text: "plain output" }],
+      });
+      expect((res.content[0] as { text: string }).text).toBe("plain output");
+      expect(warn).toHaveBeenCalledTimes(1);
+      for (const call of warn.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain(FAKE_NEEDLE_IN_ERROR);
+      }
+    });
+  });
+
+  describe("URL env-var pattern sweep (SEC C2)", () => {
+    // A NEW chain's RPC env var that is in NO hand-list, on an UNLISTED host,
+    // carrying a keyed path token → only the pattern sweep + exact-match layer
+    // catches it. FAKE token, clears the 8-char floor, has digits.
+    const AVAX_TOKEN = "FAKEavax0token1234567890deadbeef";
+    const AVAX_URL = `https://avax.example-provider.net/ext/bc/C/rpc/${AVAX_TOKEN}`;
+
+    afterEach(() => {
+      delete process.env.AVALANCHE_RPC_URL;
+      delete process.env.SONIC_INDEXER_URL;
+      delete process.env.PUBLIC_BASE_RPC_URL;
+    });
+
+    it("shape layer alone MISSES a new-chain RPC-URL credential (proves the sweep is load-bearing)", () => {
+      // Unlisted host + path token: redactSecrets (shape-only) leaves it — the
+      // RED-on-removal anchor for the sweep.
+      expect(redactSecrets(`avax rpc failed ${AVAX_URL}`)).toContain(AVAX_TOKEN);
+    });
+
+    it("a NEW *_RPC_URL env var (AVALANCHE_RPC_URL) not in any hand-list is swept — RED if reverted to a hand-list", () => {
+      process.env.AVALANCHE_RPC_URL = AVAX_URL;
+      // Reverting the sweep to the old hand-list drops AVALANCHE_RPC_URL → the
+      // token is never a needle → the shape layer misses it → these go RED.
+      expect(safeErrorMessage(new Error(`avax rpc failed. URL: ${AVAX_URL}`)))
+        .not.toContain(AVAX_TOKEN);
+      expect(viaSuccess(AVAX_URL)).not.toContain(AVAX_TOKEN);
+    });
+
+    it("a NEW *_INDEXER_URL env var is swept too (the pattern covers INDEXER, not just RPC)", () => {
+      const idxToken = "FAKEidx0token1234567890abcdef99";
+      process.env.SONIC_INDEXER_URL = `https://idx.example-provider.net/v1/${idxToken}`;
+      expect(
+        safeErrorMessage(new Error(`indexer failed ${process.env.SONIC_INDEXER_URL}`)),
+      ).not.toContain(idxToken);
+    });
+
+    it("SAFETY: a swept env var that is a PUBLIC base URL contributes NO needle (no over-redaction)", () => {
+      process.env.PUBLIC_BASE_RPC_URL = "https://api.avax.network/ext/bc/C/rpc";
+      const echoed = "https://api.avax.network/ext/bc/C/rpc/status returned 200";
+      // The env var IS swept (matches the pattern) but has no userinfo, no keyed
+      // path segment, and no credential query → no needle, so an echoed URL on
+      // that same host passes through untouched.
+      expect(redactConfiguredSecrets(echoed)).toBe(echoed);
+      expect(viaSuccess(echoed)).toContain(
+        "https://api.avax.network/ext/bc/C/rpc/status",
+      );
     });
   });
 });

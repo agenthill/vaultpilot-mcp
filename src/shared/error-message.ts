@@ -208,24 +208,19 @@ const MIN_SECRET_NEEDLE_LEN = 8;
 const RUNTIME_OVERRIDE_SERVICES: readonly ServiceId[] = ["helius", "etherscan"];
 
 /**
- * Env vars carrying a URL that may embed credentials in userinfo, a path token,
- * or a query param. These are needled by CREDENTIAL SEGMENT only
- * (`extractUrlCredentialNeedles`), never as a whole value — a public base URL
- * (`https://api.mainnet-beta.solana.com`, `https://mempool.space/api`)
- * contributes no needle.
+ * URL-shaped secret env vars are matched BY PATTERN, not enumerated in a
+ * hand-list (SEC C2). A hand-list of `*_RPC_URL` / `*_INDEXER_URL` names fails
+ * OPEN: a chain added later (`AVALANCHE_RPC_URL`, `BNB_RPC_URL`) that nobody
+ * remembered to add contributes no needle, so its embedded credential silently
+ * under-redacts. The pattern sweeps every such env var with no code change. It
+ * matches the existing UPPER_SNAKE convention (`ETHEREUM_RPC_URL`,
+ * `SOLANA_RPC_URL`, `BITCOIN_INDEXER_URL`, `LITECOIN_INDEXER_URL`). Every matched
+ * value is needled by CREDENTIAL SEGMENT only (`extractUrlCredentialNeedles`),
+ * never as a whole value — a public base URL (`https://api.mainnet-beta.solana.com`,
+ * `https://mempool.space/api`) contributes no needle, so the sweep does not
+ * over-redact.
  */
-const SECRET_URL_ENV_VARS: readonly string[] = [
-  "ETHEREUM_RPC_URL",
-  "ARBITRUM_RPC_URL",
-  "POLYGON_RPC_URL",
-  "BASE_RPC_URL",
-  "OPTIMISM_RPC_URL",
-  "SOLANA_RPC_URL",
-  "BITCOIN_RPC_URL",
-  "BITCOIN_INDEXER_URL",
-  "LITECOIN_RPC_URL",
-  "LITECOIN_INDEXER_URL",
-];
+const SECRET_URL_ENV_VAR_PATTERN = /_(?:RPC|INDEXER)_URL$/;
 
 /**
  * Env vars carrying a bare secret VALUE (an API key, a JSON-RPC password, or a
@@ -383,8 +378,15 @@ function collectConfiguredSecretNeedles(): string[] {
     // Malformed config — no config-derived needles this call.
   }
 
-  // Secret env vars.
-  for (const name of SECRET_URL_ENV_VARS) urlValues.push(process.env[name]);
+  // Secret env vars. URL-shaped ones are swept BY PATTERN (SEC C2) so a future
+  // chain's `*_RPC_URL` / `*_INDEXER_URL` is covered with no code change; each
+  // value is needled by credential segment only, so a public base URL still
+  // yields no needle. The non-URL value list stays EXPLICIT — API keys,
+  // passwords, and the project id are not per-chain-growth-prone and match no
+  // URL pattern.
+  for (const name of Object.keys(process.env)) {
+    if (SECRET_URL_ENV_VAR_PATTERN.test(name)) urlValues.push(process.env[name]);
+  }
   for (const name of SECRET_VALUE_ENV_VARS) secretValues.push(process.env[name]);
 
   // Build base needles: pure secrets whole, URL-typed by credential segment.
@@ -445,7 +447,11 @@ export function redactConfiguredSecrets(str: string): string {
   try {
     return applyNeedles(str, collectConfiguredSecretNeedles());
   } catch {
-    // Never let a redaction-path error escape carrying a needle.
+    // Never let a redaction-path error escape carrying a needle. Loud, not
+    // silent (SEC C1): warn once that the exact-match layer failed. The caller
+    // (`safeErrorMessage` / `redactStringsInPlace`) already ran the shape
+    // patterns over this string, so returning it is no new leak versus today.
+    warnRedactionLayerErrored();
     return str;
   }
 }
@@ -512,6 +518,9 @@ export function redactResponseContent<T extends { content: unknown[] }>(
   try {
     needles = collectConfiguredSecretNeedles();
   } catch {
+    // Loud, not silent (SEC C1): the exact-match layer is bypassed for this
+    // response, but every string below still passes through the shape patterns.
+    warnRedactionLayerErrored();
     needles = [];
   }
   for (const block of response.content) {
@@ -537,6 +546,9 @@ let depthCapDiagnosticEmitted = false;
 /** One-time flag so a below-floor configured value warns once, not per call. */
 let shortSecretSkipWarned = false;
 
+/** One-time flag so a redaction-layer error warns once, not per call. */
+let redactionLayerErrorWarned = false;
+
 /**
  * Surface, once, that a configured value was below the redaction floor and was
  * therefore skipped as a needle (SEC R1) — under-redaction must never be
@@ -558,13 +570,35 @@ function warnShortSecretSkipped(): void {
 }
 
 /**
+ * Surface, once, that the exact-match configured-secret redaction layer threw
+ * and was bypassed for this output (SEC C1). This is the SAME failure class as
+ * the short-secret skip above — the exact-match layer silently not running — and
+ * gets the SAME loud treatment: `warnShortSecretSkipped` deliberately made
+ * under-redaction loud, so this catch must not stay silent either. The
+ * shape-pattern layer still ran (see the two call sites), so degradation is to
+ * the pre-#771 baseline — listed hosts still covered — not to raw, i.e. no new
+ * leak versus today. NEVER logs the caught error's message or any needle/secret
+ * value: a redaction-path error could itself carry a needle.
+ */
+function warnRedactionLayerErrored(): void {
+  if (redactionLayerErrorWarned) return;
+  redactionLayerErrorWarned = true;
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[vaultpilot] configured-secret redaction layer errored; falling back to ` +
+      `shape-pattern redaction only (no value is logged).`,
+  );
+}
+
+/**
  * Test-only: reset the module-global one-time diagnostic flags so a suite that
- * exercises either diagnostic (depth cap, short-secret skip) does not leave the
- * flag set for a later, order-dependent test.
+ * exercises any diagnostic (depth cap, short-secret skip, redaction-layer error)
+ * does not leave a flag set for a later, order-dependent test.
  */
 export function __resetRedactionDiagnosticsForTest(): void {
   depthCapDiagnosticEmitted = false;
   shortSecretSkipWarned = false;
+  redactionLayerErrorWarned = false;
 }
 
 /**
