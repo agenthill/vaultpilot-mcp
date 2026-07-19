@@ -122,6 +122,11 @@ export async function getAssetsByOwner(args: {
 }): Promise<GetAssetsByOwnerResult> {
   const url = resolveHeliusUrl();
   if (url === null) throw new HeliusNotConfiguredError();
+  // #714: reviewed exception — the `f(...)` call below threads its own
+  // AbortController-backed signal (INV-T1's thread-an-AbortSignal
+  // alternative); ARCHITECTURE.md §4 INV-T1 names this aliasing test seam
+  // by file, must not be flagged.
+  // eslint-disable-next-line no-restricted-syntax
   const f = fetchOverride ?? globalThis.fetch;
   if (typeof f !== "function") {
     throw new Error("Global fetch is not available in this runtime.");

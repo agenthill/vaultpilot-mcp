@@ -59,6 +59,12 @@ async function fetchWithRateLimitDetect(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
+    // #714: reviewed exception — already threads the AbortController-backed
+    // `controller.signal` above (INV-T1's thread-an-AbortSignal alternative);
+    // this is the #693/#706 LANDED fix ARCHITECTURE.md §4 INV-T1 names by
+    // file — do not re-fix, do not route through data/http.ts (this shim is
+    // handed to web3.js's `Connection({ fetch })`, a different call shape).
+    // eslint-disable-next-line no-restricted-globals
     res = await fetch(input, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);

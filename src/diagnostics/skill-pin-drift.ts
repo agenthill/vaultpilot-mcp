@@ -103,6 +103,10 @@ export async function checkSkillPinDrift(): Promise<SkillPinDriftResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
+    // #714: reviewed exception — already threads the AbortController-backed
+    // `controller.signal` above (INV-T1's thread-an-AbortSignal alternative),
+    // matching data/http.ts's fetchWithTimeout pattern.
+    // eslint-disable-next-line no-restricted-globals
     const response = await fetch(SKILL_MD_RAW_URL, {
       signal: controller.signal,
       // Avoid CDN caching surprises by asking for the freshest copy
