@@ -1,3 +1,6 @@
+import { readUserConfig } from "../config/user-config.js";
+import { getRuntimeOverride, type ServiceId } from "../data/runtime-rpc-overrides.js";
+
 /**
  * Safely render an unknown thrown value as a human-readable string.
  *
@@ -121,8 +124,185 @@ export function redactSecrets(str: string): string {
   return out;
 }
 
+/**
+ * Exact-match configured-secret redaction (issue #771).
+ *
+ * The shape-based `redactSecrets` above is inherently host-keyed: its
+ * path-token / bare-`?key=` patterns fire only for hosts in `PROVIDER_HOST`,
+ * so a key on a CUSTOM / unlisted provider (an Ankr path token, a dRPC
+ * `?dkey=`, a self-hosted endpoint) still leaks. The durable complement is to
+ * scrub the user's OWN configured secret VALUES by exact substring match:
+ * every configured provider is covered (listed or not) with structurally zero
+ * over-redaction, because only strings the user actually configured are used
+ * as needles.
+ *
+ * This COMPOSES WITH the shape patterns — it does not replace them. The shape
+ * patterns still cover keys that surface BEFORE config is loaded, and keys in
+ * URLs the user never configured (a hard-coded default, a key pasted at
+ * runtime into a URL the MCP never persisted). Do NOT delete the shape
+ * patterns as "superseded" (SEC R5).
+ *
+ * Needles are collected FRESH at call time (never a stale module snapshot) so
+ * a key configured or rotated mid-session — e.g. via `set_helius_api_key` /
+ * `set_etherscan_api_key`, which write the runtime-override store — is redacted
+ * from the very next output (SEC R4).
+ *
+ * OVER-MATCH GUARD (SEC R1): a short or empty configured value is a
+ * catastrophic needle — a 1-char or `""` value would redact fragments of every
+ * legitimate output. Anything shorter than `MIN_SECRET_NEEDLE_LEN` is SKIPPED
+ * (matching the `{8,}` floor the shape patterns already enforce).
+ *
+ * NO-LEAK (SEC R3): the needle set is never logged, never returned, and never
+ * exposed through a getter — holding the user's plaintext secrets so they can
+ * be matched is itself a new asset, and one accidental serialization would dump
+ * every configured credential at once. `redactConfiguredSecrets` catches its
+ * own errors and returns the (already shape-redacted) input rather than letting
+ * a thrown error carry a needle out.
+ *
+ * Residuals (accepted, not closed here): a TRUNCATED secret (only a prefix of a
+ * key in a clipped error) will not exact-match — prefix matching would fix it at
+ * an over-redaction cost not worth paying; and a base64-shaped key that is
+ * PERCENT-ENCODED between its configured form and the echoed form (SEC R2) is
+ * matched only for the bare-key config fields (which are alphanumeric/hex/UUID
+ * and never re-encoded), not inside whole-URL needles. The shape patterns remain
+ * the net for the URL case on listed hosts.
+ */
+const REDACTION_MARKER = "***";
+
+/**
+ * Minimum length for a configured value to be used as a redaction needle.
+ * Mirrors the `{8,}` floor the shape patterns enforce (error-message.ts path
+ * and bare-key patterns). A value shorter than this is skipped, never matched.
+ */
+const MIN_SECRET_NEEDLE_LEN = 8;
+
+/** Services whose runtime override holds a currently-configured secret value. */
+const RUNTIME_OVERRIDE_SERVICES: readonly ServiceId[] = ["helius", "etherscan"];
+
+/**
+ * Env vars that carry a secret VALUE (an API key, a keyed RPC URL, or hosted-
+ * provider basic-auth / header credentials). Public-fallback URLs and non-secret
+ * config live elsewhere and are deliberately not enumerated here.
+ */
+const SECRET_ENV_VARS: readonly string[] = [
+  // Keyed / custom RPC URLs (may embed a provider key in path or query).
+  "ETHEREUM_RPC_URL",
+  "ARBITRUM_RPC_URL",
+  "POLYGON_RPC_URL",
+  "BASE_RPC_URL",
+  "OPTIMISM_RPC_URL",
+  "SOLANA_RPC_URL",
+  "RPC_API_KEY",
+  // Third-party API keys.
+  "ETHERSCAN_API_KEY",
+  "ONEINCH_API_KEY",
+  "RESERVOIR_API_KEY",
+  "SAFE_API_KEY",
+  "TRON_API_KEY",
+  "WALLETCONNECT_PROJECT_ID",
+  // Bitcoin / Litecoin JSON-RPC + indexer credentials.
+  "BITCOIN_RPC_URL",
+  "BITCOIN_RPC_PASSWORD",
+  "BITCOIN_RPC_AUTH_HEADER_VALUE",
+  "BITCOIN_INDEXER_URL",
+  "LITECOIN_RPC_URL",
+  "LITECOIN_RPC_PASSWORD",
+  "LITECOIN_RPC_AUTH_HEADER_VALUE",
+  "LITECOIN_INDEXER_URL",
+];
+
+/**
+ * Collect the set of currently-configured secret VALUES to redact. Reads the
+ * live user-config file, the secret env vars, and the in-memory runtime
+ * overrides on every call — no cached snapshot — so a just-configured or
+ * just-rotated key is covered. Values below the length floor are dropped, the
+ * set is deduped, and it is sorted LONGEST-FIRST so a value that contains
+ * another (a keyed URL that embeds the bare key) is redacted before its
+ * substring, avoiding partial-overlap artifacts.
+ *
+ * NEVER logs or returns anything derived from a needle beyond the redaction
+ * itself. Not exported — the needle set is not a public asset.
+ */
+function collectConfiguredSecretNeedles(): string[] {
+  const raw: Array<string | undefined> = [];
+
+  // Runtime overrides (in-memory; set via set_*_api_key). Read fresh.
+  for (const service of RUNTIME_OVERRIDE_SERVICES) {
+    raw.push(getRuntimeOverride(service) ?? undefined);
+  }
+
+  // User config file. readUserConfig can throw on malformed JSON — swallow and
+  // fall through to env/overrides rather than failing the redaction path.
+  try {
+    const cfg = readUserConfig();
+    if (cfg) {
+      raw.push(cfg.rpc?.apiKey);
+      if (cfg.rpc?.customUrls) {
+        for (const url of Object.values(cfg.rpc.customUrls)) raw.push(url);
+      }
+      raw.push(
+        cfg.etherscanApiKey,
+        cfg.oneInchApiKey,
+        cfg.reservoirApiKey,
+        cfg.safeApiKey,
+        cfg.tronApiKey,
+        cfg.solanaRpcUrl,
+        cfg.bitcoinIndexerUrl,
+        cfg.litecoinIndexerUrl,
+        cfg.walletConnect?.projectId,
+      );
+    }
+  } catch {
+    // Malformed config — no config-derived needles this call.
+  }
+
+  // Secret env vars.
+  for (const name of SECRET_ENV_VARS) raw.push(process.env[name]);
+
+  // Floor-filter + dedup + longest-first.
+  const seen = new Set<string>();
+  const needles: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const trimmed = v.trim();
+    if (trimmed.length < MIN_SECRET_NEEDLE_LEN) continue; // over-match guard
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    needles.push(trimmed);
+  }
+  needles.sort((a, b) => b.length - a.length);
+  return needles;
+}
+
+/** Replace every exact occurrence of each needle with the redaction marker. */
+function applyNeedles(str: string, needles: readonly string[]): string {
+  let out = str;
+  for (const needle of needles) {
+    if (out.includes(needle)) out = out.split(needle).join(REDACTION_MARKER);
+  }
+  return out;
+}
+
+/**
+ * Exact-match scrub of the user's currently-configured secret values.
+ * Collects the needle set fresh, then replaces every exact occurrence. Catches
+ * its own errors and returns the input unchanged (never surfaces a caught error
+ * that could embed a needle). Intended to run AFTER `redactSecrets` so the two
+ * layers compose (shape-based net + exact-match known-secret catch).
+ */
+export function redactConfiguredSecrets(str: string): string {
+  try {
+    return applyNeedles(str, collectConfiguredSecretNeedles());
+  } catch {
+    // Never let a redaction-path error escape carrying a needle.
+    return str;
+  }
+}
+
 export function safeErrorMessage(error: unknown): string {
-  return redactSecrets(safeErrorMessageRaw(error));
+  // Shape-based net first, then exact-match of the user's own configured
+  // secrets (issue #771) — composed, not replacing.
+  return redactConfiguredSecrets(redactSecrets(safeErrorMessageRaw(error)));
 }
 
 /**
@@ -173,25 +353,72 @@ export function safeErrorMessage(error: unknown): string {
 export function redactResponseContent<T extends { content: unknown[] }>(
   response: T,
 ): T {
+  // Collect the exact-match needle set ONCE per response (not per string — the
+  // collector reads the config file, so per-string collection would re-read
+  // disk for every field). Every string is scrubbed with the shape patterns
+  // AND this set.
+  let needles: string[] = [];
+  try {
+    needles = collectConfiguredSecretNeedles();
+  } catch {
+    needles = [];
+  }
   for (const block of response.content) {
-    redactStringsInPlace(block, 0);
+    redactStringsInPlace(block, 0, needles);
   }
   return response;
 }
 
 /**
- * Redact every string reachable inside a content block, mutating in place.
- * Skips `data` / `blob` keys (base64 image/audio/resource payloads — never a
- * key carrier, and redaction could corrupt binary). Depth-bounded to guard
- * against a pathological/cyclic block shape; MCP blocks are shallow.
+ * Depth bound for `redactStringsInPlace`. Raised from the original silent
+ * `depth > 4` cap (issue #770 folded observation): a credential nested deeper
+ * than 4 levels in a future non-text block would have been silently missed —
+ * a silent cap on a SECURITY scrub is the wrong failure direction. The bound is
+ * kept (not removed) so a pathological/cyclic block shape still terminates, but
+ * raised well past any realistic MCP block, and hitting it now emits a
+ * diagnostic (never the value) instead of failing silent.
  */
-function redactStringsInPlace(value: unknown, depth: number): void {
-  if (value === null || typeof value !== "object" || depth > 4) return;
+const MAX_REDACT_DEPTH = 32;
+
+/** One-time flag so a pathological deep block warns once, not per string. */
+let depthCapDiagnosticEmitted = false;
+
+/**
+ * Redact every string reachable inside a content block, mutating in place.
+ * Applies the shape-based `redactSecrets` AND the exact-match `needles`
+ * (issue #771). Skips `data` / `blob` keys (base64 image/audio/resource
+ * payloads — never a key carrier, and redaction could corrupt binary).
+ * Depth-bounded (`MAX_REDACT_DEPTH`) to guard against a pathological/cyclic
+ * block shape; the cap emits a diagnostic when hit rather than truncating
+ * silently (issue #770).
+ */
+function redactStringsInPlace(
+  value: unknown,
+  depth: number,
+  needles: readonly string[],
+): void {
+  if (value === null || typeof value !== "object") return;
+  if (depth > MAX_REDACT_DEPTH) {
+    if (!depthCapDiagnosticEmitted) {
+      depthCapDiagnosticEmitted = true;
+      // Diagnostic only — NEVER the value/secret. Signals that a
+      // deeper-than-expected block was not fully scrubbed so the shape is
+      // investigated rather than the leak going silent.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[vaultpilot] redaction depth cap (${MAX_REDACT_DEPTH}) hit — a deeply ` +
+          `nested content block was not fully scrubbed. This is unexpected; ` +
+          `please report the tool that produced it.`,
+      );
+    }
+    return;
+  }
+  const scrub = (s: string): string => applyNeedles(redactSecrets(s), needles);
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
       const el = value[i];
-      if (typeof el === "string") value[i] = redactSecrets(el);
-      else redactStringsInPlace(el, depth + 1);
+      if (typeof el === "string") value[i] = scrub(el);
+      else redactStringsInPlace(el, depth + 1, needles);
     }
     return;
   }
@@ -199,8 +426,8 @@ function redactStringsInPlace(value: unknown, depth: number): void {
   for (const key of Object.keys(obj)) {
     if (key === "data" || key === "blob") continue;
     const v = obj[key];
-    if (typeof v === "string") obj[key] = redactSecrets(v);
-    else redactStringsInPlace(v, depth + 1);
+    if (typeof v === "string") obj[key] = scrub(v);
+    else redactStringsInPlace(v, depth + 1, needles);
   }
 }
 
