@@ -41,6 +41,7 @@ function isTransportError(err: unknown): boolean {
     "WebSocketRequestError",
     "LimitExceededRpcError",
     "InternalRpcError",
+    "AbortError",
   ]);
   // JSON-RPC codes for provider degradation that survives the retry budget.
   const TRANSPORT_RPC_CODES = new Set([-32005, -32603, 429]);
