@@ -86,12 +86,24 @@ export function safeErrorMessage(error: unknown): string {
  * (Infura `/v3/<key>`, Alchemy `/v2/<key>`, Helius `?api-key=<key>`) verbatim.
  *
  * This runs the SAME `redactSecrets` transform over every text content block
- * at the MCP response boundary, so the leak is closed once — for every
- * provider, every tool, and every current OR future `reason`/`note` field —
- * rather than per-adapter (per ARCHITECTURE §4 INV-T2, and the #707 design
- * note). Mutates in place; every caller builds a fresh `content` array per
- * request, so the mutation is local. Idempotent — re-redacting an
- * already-safe error block is a no-op (`***` matches no key pattern).
+ * of the response it is APPLIED to — closing the leak for every provider and
+ * every `reason`/`note` field in that response, current or future, rather than
+ * per-adapter (per ARCHITECTURE §4 INV-T2, and the #707 design note).
+ *
+ * It does NOT cover a tool "by construction" on its own: it only redacts the
+ * boundaries it is wired into, so it must be applied at EVERY MCP
+ * response-serialization boundary. There is no single choke point — a handler
+ * that serializes its own `{ content }` return without routing through a
+ * wrapped boundary is uncovered (that was the #707-rework gap: the three
+ * directly-registered preview/send handlers below). The full set of wired
+ * boundaries: `handler()`'s success return, `broadcastSimulationDispatch`'s
+ * envelope, and the `preview_send` / `preview_solana_send` / `send_transaction`
+ * handler success returns (`src/index.ts`).
+ *
+ * Mutates in place; every caller builds a fresh `content` array per request,
+ * so the mutation is local. Idempotent — re-redacting an already-safe block
+ * is a no-op (`***` matches no key pattern), so wrapping a clean preview/send
+ * payload (tx hashes, addresses, amounts) leaves it untouched.
  */
 export function redactResponseContent<T extends { content: unknown[] }>(
   response: T,

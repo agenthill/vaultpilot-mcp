@@ -1424,7 +1424,14 @@ export function previewSendHandler(
           ...(result.clearSignOnly ? { clearSignOnly: true } : {}),
         }),
       });
-      return { content };
+      // #707: SUCCESS-path redaction. `preview_send` is registered directly
+      // (not via the `handler()` wrapper), so it bypasses that choke point's
+      // redaction (L1013). The serialized `result` JSON block can carry a
+      // keyed provider URL embedded upstream (e.g. a simulation note built
+      // from a caught `err.message`); scrub every text block here too. Same
+      // idempotent `redactSecrets` transform — a clean tx `to`/`valueWei`/
+      // `preSignHash`/gas payload passes through untouched.
+      return redactResponseContent({ content });
     } catch (error) {
       // #695: route through safeErrorMessage so a viem transport error that
       // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
@@ -1463,7 +1470,13 @@ export function previewSolanaSendHandler(
       if (demoNotice) content.push({ type: "text", text: demoNotice });
       content.push({ type: "text", text: renderSolanaVerificationBlock(pinned) });
       content.push({ type: "text", text: renderSolanaAgentTaskBlock(pinned) });
-      return { content };
+      // #707: SUCCESS-path redaction. `preview_solana_send` is registered
+      // directly, bypassing the `handler()` choke point (L1013). The
+      // serialized `pinned` tx block can carry a keyed Helius URL
+      // (`?api-key=<key>`) embedded upstream; scrub every text block here too.
+      // Idempotent `redactSecrets` transform — a clean blockhash/from/amount
+      // payload passes through untouched.
+      return redactResponseContent({ content });
     } catch (error) {
       // #695: route through safeErrorMessage so a viem transport error that
       // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
@@ -1530,7 +1543,14 @@ export function sendTransactionHandler(
           ...(result.durableNonce ? { durableNonce: result.durableNonce } : {}),
         }),
       });
-      return { content };
+      // #707: SUCCESS-path redaction. `send_transaction` is registered
+      // directly, bypassing the `handler()` choke point (L1013). The
+      // serialized broadcast `result` block can carry a keyed provider URL
+      // embedded upstream (e.g. a relay/RPC note built from a caught
+      // `err.message`); scrub every text block here too. Idempotent
+      // `redactSecrets` transform — the tx hash / explorer link / chain
+      // payload passes through untouched.
+      return redactResponseContent({ content });
     } catch (error) {
       // #695: route through safeErrorMessage so a viem transport error that
       // carries the keyed provider URL (Infura `/v3/<key>`, Alchemy
