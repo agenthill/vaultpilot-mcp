@@ -156,6 +156,24 @@ interface StoredSolanaTx {
   draft: SolanaTxDraft;
   /** Present only after `pinSolanaHandle`. `send_transaction` requires it. */
   pinned?: UnsignedSolanaTx;
+  /**
+   * Set the instant `send_transaction` is about to hand this handle's signed
+   * bytes to the network (`broadcastSolanaTx`), BEFORE the network call
+   * resolves. Issue #788 — the durable-nonce double-spend guard. A broadcast
+   * that errors/aborts AFTER the node already landed the tx leaves the handle
+   * alive (retire is success-only) with an advanced on-chain nonce; a
+   * subsequent `preview_solana_send` would otherwise silently re-fetch that
+   * advanced nonce and re-pin a byte-different, independently-valid duplicate
+   * transfer. This flag makes the outcome AMBIGUOUS-by-construction: once set,
+   * the next preview fails closed rather than re-pinning. Never cleared —
+   * a successful broadcast retires the whole entry instead.
+   *
+   * Keyed on the broadcast ATTEMPT, not on the nonce having moved: failures
+   * BEFORE the network call (preview-token / payload-hash mismatch, Ledger
+   * signing failure) never reach the mark, so a definite pre-broadcast failure
+   * (which cannot have landed) does not over-block a legitimate retry.
+   */
+  broadcastAttempted?: boolean;
   expiresAt: number;
 }
 
@@ -390,6 +408,31 @@ export function consumeSolanaHandle(handle: string): UnsignedSolanaTx {
 
 export function retireSolanaHandle(handle: string): void {
   store.delete(handle);
+}
+
+/**
+ * Mark `handle` as having had a network broadcast ATTEMPTED on it. Issue
+ * #788. Called by `sendSolanaTransaction` immediately before
+ * `broadcastSolanaTx`, so the flag is already set when an abort/timeout/RPC
+ * error unwinds the send path without retiring the handle. No-op on an
+ * unknown/expired handle (nothing left to protect). See `StoredSolanaTx.
+ * broadcastAttempted` for the full rationale.
+ */
+export function markSolanaBroadcastAttempted(handle: string): void {
+  prune();
+  const entry = store.get(handle);
+  if (entry) entry.broadcastAttempted = true;
+}
+
+/**
+ * True if a network broadcast was ATTEMPTED on `handle` (and the handle is
+ * still alive — i.e. the broadcast did NOT retire it via success). Issue
+ * #788 — `previewSolanaSend` calls this to fail closed rather than re-pin an
+ * advanced durable nonce into a duplicate transfer.
+ */
+export function wasSolanaBroadcastAttempted(handle: string): boolean {
+  prune();
+  return store.get(handle)?.broadcastAttempted === true;
 }
 
 /** Test-only: true if `handle` is still active (not retired, not expired). */
