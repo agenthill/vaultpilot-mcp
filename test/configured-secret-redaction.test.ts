@@ -7,6 +7,7 @@ import {
   redactConfiguredSecrets,
   safeErrorMessage,
   redactResponseContent,
+  __resetRedactionDiagnosticsForTest,
 } from "../src/shared/error-message.js";
 import {
   setConfigDirForTesting,
@@ -51,6 +52,12 @@ beforeEach(() => {
   tmpHome = mkdtempSync(pjoin(tmpdir(), "vaultpilot-cfg-secret-"));
   setConfigDirForTesting(tmpHome);
   _resetRuntimeRpcOverridesForTests();
+  // Reset the module-global one-time diagnostic flags (depth cap + short-secret
+  // skip) so warn-asserting tests are order-independent (Fix 4a).
+  __resetRedactionDiagnosticsForTest();
+  // Silence console.warn by default; warn-asserting tests read the spy via
+  // vi.mocked(console.warn). afterEach restores it.
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -101,6 +108,96 @@ describe("issue #771 — exact-match configured-secret scrubbing", () => {
       expect(safeErrorMessage(new Error(`solana rpc failed: ${CUSTOM_SOLANA_URL}`)))
         .not.toContain(ANKR_TOKEN);
       expect(viaSuccess(CUSTOM_SOLANA_URL)).not.toContain(ANKR_TOKEN);
+    });
+  });
+
+  describe("encoding-variant matching (SEC R2)", () => {
+    // Base64-shaped key: contains + / =, which become %2B %2F %3D once the key
+    // passes through URL construction or an echoed encoded URL.
+    const B64_KEY = "FAKE1inch+key/value==0123456789";
+    const B64_ENCODED = "FAKE1inch%2Bkey%2Fvalue%3D%3D0123456789";
+    // Appears on an UNLISTED host under a non-`apikey` param name, so the shape
+    // layer does NOT catch it — only the exact-match encoding variant can. This
+    // is SEC's mandatory R2 falsifier ("the one worth writing first").
+    const ENCODED_HAYSTACK = `Upstream error: request to https://api.1inch.dev/swap?dkey=${B64_ENCODED} failed`;
+
+    it("shape layer alone leaves the percent-encoded key (proves the encoding variant is load-bearing)", () => {
+      // RED-on-removal anchor: redactSecrets is shape-only and never touches the
+      // dkey= param on an unlisted host, so the encoded key survives it.
+      expect(redactSecrets(ENCODED_HAYSTACK)).toContain(B64_ENCODED);
+    });
+
+    it("the percent-encoded (%2B/%2F/%3D) form of a base64-shaped configured key is still redacted", () => {
+      writeConfig({ rpc: { provider: "custom" }, oneInchApiKey: B64_KEY });
+      // The RAW key never appears in the haystack — only its encoded form — so a
+      // naive raw-substring redactor (no encoding variant) leaves it: RED.
+      expect(ENCODED_HAYSTACK).not.toContain(B64_KEY);
+      expect(ENCODED_HAYSTACK).toContain(B64_ENCODED);
+      const out = redactConfiguredSecrets(ENCODED_HAYSTACK);
+      expect(out).not.toContain(B64_ENCODED);
+      expect(out).toContain("***");
+    });
+
+    it("the encoded key is scrubbed on the ERROR path (safeErrorMessage)", () => {
+      writeConfig({ rpc: { provider: "custom" }, oneInchApiKey: B64_KEY });
+      expect(safeErrorMessage(new Error(ENCODED_HAYSTACK))).not.toContain(B64_ENCODED);
+    });
+
+    it("the encoded key is scrubbed on the SUCCESS path (redactResponseContent)", () => {
+      writeConfig({ rpc: { provider: "custom" }, oneInchApiKey: B64_KEY });
+      expect(viaSuccess(ENCODED_HAYSTACK)).not.toContain(B64_ENCODED);
+    });
+  });
+
+  describe("over-redaction guard — public base URL survives (Fix 1)", () => {
+    it("a configured PUBLIC base URL (bitcoinIndexerUrl) contributes no needle; an echoed sub-path passes through untouched", () => {
+      writeConfig({
+        rpc: { provider: "custom" },
+        bitcoinIndexerUrl: "https://mempool.space/api",
+      });
+      const echoed = "https://mempool.space/api/tx/abcdef0123456789abcdef";
+      // No userinfo, no key/token path segment, no credential query → no needle,
+      // so the echoed URL on the same host is NOT clobbered. Reverting Fix 1 to
+      // whole-URL needles turns this RED (the base becomes a needle).
+      expect(redactConfiguredSecrets(echoed)).toBe(echoed);
+      expect(viaSuccess(echoed)).toContain("https://mempool.space/api/tx/");
+    });
+
+    it("a configured public custom RPC base URL is not needled (host/path words survive)", () => {
+      writeConfig({
+        rpc: {
+          provider: "custom",
+          customUrls: { ethereum: "https://api.mainnet-beta.solana.com" },
+        },
+      });
+      const echoed = "call to https://api.mainnet-beta.solana.com/health returned 200";
+      expect(redactConfiguredSecrets(echoed)).toBe(echoed);
+    });
+
+    it("the credential segment of an otherwise-public URL IS still needled (guard does not disarm the feature)", () => {
+      // Same host as the public case, but with a key path token → the token is
+      // needled while the bare host would not be.
+      const token = "FAKEkeyed0token1234567890abcdef";
+      writeConfig({
+        rpc: { provider: "custom" },
+        bitcoinIndexerUrl: `https://mempool.space/api/${token}`,
+      });
+      expect(redactConfiguredSecrets(`indexer https://mempool.space/api/${token}/tx`))
+        .not.toContain(token);
+    });
+  });
+
+  describe("short-secret skip warning (SEC R1 / Fix 3)", () => {
+    it("a below-floor configured value emits a value-free skip warning, once", () => {
+      const warn = vi.mocked(console.warn); // silenced spy installed in beforeEach
+      writeConfig({ rpc: { provider: "custom" }, tronApiKey: "shortk" }); // 6 chars < 8
+      redactConfiguredSecrets("some ordinary output");
+      redactConfiguredSecrets("more ordinary output"); // second call must NOT re-warn
+      expect(warn).toHaveBeenCalledTimes(1);
+      // The diagnostic must never carry the value.
+      for (const call of warn.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain("shortk");
+      }
     });
   });
 
@@ -205,7 +302,7 @@ describe("issue #771 — exact-match configured-secret scrubbing", () => {
     it("hitting the raised depth cap emits a value-free diagnostic (not silent)", () => {
       const secret = "FAKEtoodeep0123456789abcdef";
       writeConfig({ rpc: { provider: "custom" }, etherscanApiKey: secret });
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warn = vi.mocked(console.warn); // silenced spy installed in beforeEach
       // Build a chain deeper than MAX_REDACT_DEPTH (32).
       let node: Record<string, unknown> = { leak: `key=${secret}` };
       for (let i = 0; i < 40; i++) node = { child: node };
