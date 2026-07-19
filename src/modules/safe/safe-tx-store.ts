@@ -37,6 +37,29 @@ interface SafeTxEntry {
 
 const store = new Map<string, SafeTxEntry>();
 
+/**
+ * Recursively `Object.freeze` `value` and every plain-object/array it
+ * reaches, so a later `entry.body.to = x` throws in strict mode instead of
+ * silently sticking. Sibling of `signing/tx-store.ts`'s `deepFreeze`
+ * (issue #710/#730, swept across tron/solana/btc/ltc by #742) — the Safe
+ * store was the one #742 missed. Issue #751.
+ *
+ * Applied to the `body` VALUE only, never the `SafeTxEntry` wrapper: the
+ * wrapper's `expiresAt` and future metadata stay mutable for the store's own
+ * bookkeeping, matching how the sibling stores freeze only the stored tx.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return value;
+  }
+  if (Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
+
 function prune(now = Date.now()): void {
   for (const [hash, entry] of store) {
     if (entry.expiresAt < now) store.delete(hash);
@@ -54,7 +77,12 @@ export function rememberSafeTx(args: {
   store.set(args.safeTxHash.toLowerCase(), {
     chain: args.chain,
     safeAddress: args.safeAddress,
-    body: args.body,
+    // Deep-freeze the body so a mutation of the object `lookupSafeTx` hands
+    // back (by reference) cannot alter what a later `lookupSafeTx` on the
+    // same hash — or the `submit_safe_tx_signature` POST — sees. Enforces the
+    // "server is source of truth" binding this store's doc comment relies on,
+    // rather than resting on "nothing currently mutates it" (issue #751).
+    body: deepFreeze(args.body),
     proposeHandle: args.proposeHandle,
     expiresAt: Date.now() + SAFE_TX_TTL_MS,
   });
