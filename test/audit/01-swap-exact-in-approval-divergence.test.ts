@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { decodeFunctionData } from "viem";
+import { decodeFunctionData, encodeFunctionData } from "viem";
 import { erc20Abi } from "../../src/abis/erc20.js";
+import { lifiDiamondAbi } from "../../src/abis/lifi-diamond.js";
 
 /**
  * Audit finding R-A1 (Medium): swap exact-in path trusts LiFi's
@@ -29,6 +30,35 @@ import { erc20Abi } from "../../src/abis/erc20.js";
 const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const USDT = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
 const LIFI_DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE";
+
+/**
+ * A single clean USDC→USDT generic-swap leg (#685 `vetLifiQuote` classifies it
+ * as generic-swap and SHIPs). `legFromAmount` matches the quote's
+ * `action.fromAmount` so the leg-walk topology passes and the fromAmount-drift
+ * guard downstream (not this gate) is what fires on an inflated quote.
+ */
+function makeCleanSwapCalldata(legFromAmount: bigint, minAmountOut: bigint): `0x${string}` {
+  return encodeFunctionData({
+    abi: lifiDiamondAbi,
+    functionName: "swapTokensSingleV3ERC20ToERC20",
+    args: [
+      ("0x" + "11".repeat(32)) as `0x${string}`,
+      "vaultpilot-mcp",
+      "",
+      "0xC0f5b7f7703BA95dC7C09D4eF50A830622234075" as `0x${string}`,
+      minAmountOut,
+      {
+        callTo: LIFI_DIAMOND as `0x${string}`,
+        approveTo: LIFI_DIAMOND as `0x${string}`,
+        sendingAssetId: USDC as `0x${string}`,
+        receivingAssetId: USDT as `0x${string}`,
+        fromAmount: legFromAmount,
+        callData: "0x" as `0x${string}`,
+        requiresDeposit: true,
+      },
+    ],
+  });
+}
 
 describe("R-A1 — swap exact-in approval/description divergence (audit)", () => {
   beforeEach(() => {
@@ -83,7 +113,13 @@ describe("R-A1 — swap exact-in approval/description divergence (audit)", () =>
         },
         transactionRequest: {
           to: LIFI_DIAMOND,
-          data: "0xdeadbeef", // opaque Diamond calldata — irrelevant for this PoC
+          // Real generic-swap calldata whose leg fromAmount matches the
+          // (inflated) action.fromAmount, so vetLifiQuote SHIPs and the
+          // downstream fromAmount-drift guard is what refuses.
+          data: makeCleanSwapCalldata(
+            INFLATED_FROM_WEI,
+            SCALED_TO_WEI - SCALED_TO_WEI / 200n,
+          ),
           value: "0x0",
           gasLimit: "0x30d40",
         },
@@ -142,7 +178,7 @@ describe("R-A1 — swap exact-in approval/description divergence (audit)", () =>
         },
         transactionRequest: {
           to: LIFI_DIAMOND,
-          data: "0xdeadbeef",
+          data: makeCleanSwapCalldata(MATCHING_FROM_WEI, 99_000_000n),
           value: "0x0",
           gasLimit: "0x30d40",
         },

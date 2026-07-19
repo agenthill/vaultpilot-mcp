@@ -17,7 +17,8 @@
  *     the agent can offer to retry without it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { parseUnits } from "viem";
+import { parseUnits, encodeFunctionData } from "viem";
+import { lifiDiamondAbi } from "../src/abis/lifi-diamond.js";
 
 const fetchQuoteMock = vi.fn();
 vi.mock("../src/modules/swap/lifi.js", () => ({
@@ -86,16 +87,40 @@ function makeIntraChainQuote(tool: string) {
     },
     transactionRequest: {
       to: LIFI_DIAMOND,
-      // Intra-chain swap calldata: NOT bridge-shaped, so
-      // `verifyLifiBridgeIntent` returns silently. Any non-bridge
-      // bytes work as long as the prefix isn't accidentally a
-      // valid LiFi bridge selector.
-      data: ("0xfeedface" + "00".repeat(36)) as `0x${string}`,
+      // Intra-chain generic-swap calldata: a single clean USDC→WETH leg with
+      // no principal skim. `vetLifiQuote` (#685) classifies it as generic-swap
+      // and SHIPs it (baked min-out 0.0327 ≤ 0.033 WETH, no fee leg), and
+      // `verifyLifiBridgeIntent` returns silently (no BridgeData tuple).
+      data: makeCleanIntraChainSwapCalldata(),
       value: "0",
       gasLimit: "200000",
     },
     tool,
   };
+}
+
+/** A single clean USDC→WETH generic-swap leg matching `makeIntraChainQuote`. */
+function makeCleanIntraChainSwapCalldata(): `0x${string}` {
+  return encodeFunctionData({
+    abi: lifiDiamondAbi,
+    functionName: "swapTokensSingleV3ERC20ToERC20",
+    args: [
+      ("0x" + "11".repeat(32)) as `0x${string}`,
+      "vaultpilot-mcp",
+      "",
+      EVM_WALLET as `0x${string}`,
+      32_700_000_000_000_000n, // baked _minAmountOut = toAmountMin (0.0327 WETH)
+      {
+        callTo: LIFI_DIAMOND as `0x${string}`,
+        approveTo: LIFI_DIAMOND as `0x${string}`,
+        sendingAssetId: ETH_USDC as `0x${string}`,
+        receivingAssetId: ETH_WETH as `0x${string}`,
+        fromAmount: 100_000_000n, // == action.fromAmount (100 USDC)
+        callData: "0x" as `0x${string}`,
+        requiresDeposit: true,
+      },
+    ],
+  });
 }
 
 beforeEach(() => {
