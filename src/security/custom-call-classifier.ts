@@ -145,8 +145,9 @@ export function assertSendFamilyRecipientIsWallet(
       `(via a prior allowance/operator/approval), so sending them to an arbitrary address is ` +
       `value-exfil and is NOT bypassable through this escape hatch — the ` +
       `\`acknowledgeKnownExfilPattern\` override cannot launder it. The only legitimate case is ` +
-      `pulling to YOUR OWN WALLET (recipient == your wallet). If you intended to send to ` +
-      `someone else, use the protocol-specific prepare_* tool. (issue #741)`,
+      `pulling to YOUR OWN WALLET (recipient == your wallet). Sending to someone else needs a ` +
+      `recipient-verified send path, which does not exist yet — tracked as issue #756. ` +
+      `(issue #741)`,
   );
 }
 
