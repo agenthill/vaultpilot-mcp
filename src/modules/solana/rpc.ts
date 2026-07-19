@@ -146,6 +146,9 @@ export function getSolanaConnection(): Connection {
   if (cachedConnection && cachedConnectionUrl === url) {
     return cachedConnection;
   }
+  // #713: keep this path synchronous from the cache-check to the cache-write —
+  // a yield here reopens the URL-swap race. test/solana-rpc-connection-race.test.ts
+  // is the CI tripwire.
   // `confirmed` is the sweet spot for read-only portfolio/history queries —
   // `processed` is racy (may return state rolled back a slot later) and
   // `finalized` adds ~13s of latency for no meaningful safety win on reads.

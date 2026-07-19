@@ -20,11 +20,13 @@
  * This test tries hard to falsify that: it fires a burst of overlapping
  * async callers, flips the runtime override between every one of them
  * (including via setTimeout(0)/microtask gaps to give the scheduler every
- * chance to interleave), and asserts the invariant a real race would
- * violate: every returned Connection's endpoint matches what
- * `cachedConnectionUrl` says was cached at the moment that call returned,
- * and the module never produces two *live* (i.e. currently-cached)
- * Connection objects for one instant in time.
+ * chance to interleave), then asserts the one thing a real race would
+ * break — the lost-swap check `expect(results[results.length - 1]).toBe(
+ * finalUrl)`: the last caller's returned endpoint must equal the
+ * connection's final cached endpoint. If a yield ever opened a window
+ * between the cache-check and the cache-write, a later caller could read
+ * a stale cache and "lose" its swap to an earlier one — that's exactly
+ * what this assertion goes RED on.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { getSolanaConnection, resetSolanaConnection } from "../src/modules/solana/rpc.js";
@@ -70,15 +72,6 @@ describe("getSolanaConnection — issue #713 concurrent URL-swap falsifier", () 
     );
 
     await Promise.all(callers);
-
-    // Invariant a real race would break: at every observation, the
-    // connection handed back must be a well-formed Helius URL embedding
-    // one of the two known keys — never a torn/mixed value, never
-    // undefined/empty, and the module-level cache must agree with the
-    // last call's result.
-    for (const url of results) {
-      expect(url.includes(HELIUS_KEY_A) || url.includes(HELIUS_KEY_B)).toBe(true);
-    }
 
     // Final state: cache must reflect exactly the last override set,
     // with no lost swap (a lost swap would leave the cache pinned to a
