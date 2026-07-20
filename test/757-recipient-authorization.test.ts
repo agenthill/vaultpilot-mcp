@@ -232,6 +232,70 @@ describe("#757 D2-rot — module-load anti-rot enumeration", () => {
   });
 });
 
+// ═══════════════════════════ F1 — walkParam total over the grammar ════════════
+describe("#757 F1 — walkParam is TOTAL over the ABI type grammar (no blind shape)", () => {
+  // A leaf the walker never emits is a leaf the boot enumeration never demands a
+  // bucket for and gateCall never gates. PRE-F1 these shapes emitted NO leaf, so
+  // findUnclassifiedPaths could not see them — a recipient hidden in an
+  // `address[2]`/`tuple[2]`/`bytes20` on a recognized dest booted clean and signed.
+  // POST-F1 the walker decomposes every shape and the detector reports it. Each
+  // `toContain` goes RED if the walkParam total-grammar rewrite is reverted (the
+  // old walker's trailing scalar no-op swallows these), while the CONTROL stays
+  // GREEN either way — proving the detection is the fix, not a broken apparatus.
+  const mkAbi = (name: string, inputs: readonly unknown[]): Abi =>
+    [{ type: "function", name, stateMutability: "nonpayable", inputs, outputs: [] }] as unknown as Abi;
+
+  it("address[2] (fixed-size array) recipient is DETECTED", () => {
+    expect(findUnclassifiedPaths([mkAbi("distribute", [{ name: "recipient", type: "address[2]" }])])).toContain(
+      "distribute.recipient",
+    );
+  });
+  it("address[][] (nested array) recipient is DETECTED", () => {
+    expect(findUnclassifiedPaths([mkAbi("fanout", [{ name: "recipient", type: "address[][]" }])])).toContain(
+      "fanout.recipient",
+    );
+  });
+  it("tuple[2] (fixed-size tuple array) with an address field is DETECTED", () => {
+    const abi = mkAbi("batch", [
+      {
+        name: "orders",
+        type: "tuple[2]",
+        components: [
+          { name: "recipient", type: "address" },
+          { name: "amount", type: "uint256" },
+        ],
+      },
+    ]);
+    expect(findUnclassifiedPaths([abi])).toContain("batch.orders.recipient");
+  });
+  it("bytes[2] (fixed-size bytes array) is DETECTED (recurse leaf)", () => {
+    expect(findUnclassifiedPaths([mkAbi("execMany", [{ name: "calls", type: "bytes[2]" }])])).toContain(
+      "execMany.calls",
+    );
+  });
+  it("bytes20 (bytesM, M≠32) is DETECTED (opaque leaf)", () => {
+    expect(findUnclassifiedPaths([mkAbi("tag", [{ name: "blob", type: "bytes20" }])])).toContain("tag.blob");
+  });
+  it("SEC's exact falsifier — address[2] recipient + bytes20 param on one fn, BOTH detected", () => {
+    const abi = mkAbi("drain", [
+      { name: "recipient", type: "address[2]" },
+      { name: "note", type: "bytes20" },
+    ]);
+    const unclassified = findUnclassifiedPaths([abi]);
+    expect(unclassified).toContain("drain.recipient");
+    expect(unclassified).toContain("drain.note");
+  });
+  it("CONTROL — plain uint256/bool/string args emit NO leaf (walker is total, not over-eager)", () => {
+    const abi = mkAbi("noop", [
+      { name: "amount", type: "uint256" },
+      { name: "flag", type: "bool" },
+      { name: "memo", type: "string" },
+      { name: "ids", type: "uint256[]" },
+    ]);
+    expect(findUnclassifiedPaths([abi])).toHaveLength(0);
+  });
+});
+
 // ═══════════════════════════ D2 bucket-4 provenance ═══════════════════════════
 describe("#757 D2/D3 — bucket-4 USER_DIRECTED provenance discriminator", () => {
   beforeEach(() => vi.resetModules());
@@ -386,20 +450,15 @@ describe("#757 D1 — fail-closed account-set precondition (PREVIEW locus)", () 
   beforeEach(() => vi.resetModules());
   afterEach(() => vi.restoreAllMocks());
 
-  // All four empty-producer states collapse to getConnectedAccounts() === [] at
-  // this seam — the guard refuses on the empty RESULT, independent of WHICH
-  // producer emptied it (design D1 branch 1).
-  for (const producer of [
-    "(a) no session survives restore",
-    "(b) settled session, no eip155 namespace",
-    "(c) empty eip155.accounts array",
-    "(d) every entry fails the CAIP-10/EVM_ADDRESS filter",
-  ]) {
-    it(`empty account set via ${producer} → REFUSED (even with a wallet recipient)`, async () => {
-      mockEvmRpc([]);
-      await expect(previewOf(tx(AAVE_V3_POOL, aaveWithdraw(WALLET)))).rejects.toThrow(REFUSAL);
-    });
-  }
+  // Empty account set → REFUSED — the D1 branch-1 LINKAGE (gate refuses on the
+  // empty RESULT, independent of which producer emptied it). The FOUR distinct
+  // producer states that each empty the set are exercised against the REAL
+  // getConnectedAccounts in test/757-d1-producer-states.test.ts; a stub-`[]` ×4
+  // loop here could not tell them apart (REVIEW's overclaim finding).
+  it("empty account set → REFUSED (even with a wallet recipient)", async () => {
+    mockEvmRpc([]);
+    await expect(previewOf(tx(AAVE_V3_POOL, aaveWithdraw(WALLET)))).rejects.toThrow(REFUSAL);
+  });
 
   it("falsy/missing tx.from (non-demo) → REFUSED (design D1 branch 2)", async () => {
     mockEvmRpc([WALLET]);
