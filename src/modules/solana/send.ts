@@ -13,7 +13,9 @@ import {
   pinSolanaHandle,
   markSolanaBroadcastAttempted,
   wasSolanaBroadcastAttempted,
+  getSolanaBroadcastSignature,
 } from "../../signing/solana-tx-store.js";
+import bs58 from "bs58";
 import { solanaPayloadFingerprint } from "../../signing/verification.js";
 import {
   signSolanaTxOnLedger,
@@ -554,17 +556,36 @@ export async function previewSolanaSend(args: {
   // (the flag was never set), so this does not trade the double-spend for an
   // availability break (SEC req 3).
   if (wasSolanaBroadcastAttempted(args.handle)) {
+    // The recovery MUST be executable. Emit the REAL tool (`get_transaction_status`,
+    // chain='solana') with its args INLINE so the agent can paste them verbatim:
+    //  - `txHash` = the ed25519 signature persisted at broadcast-attempt time
+    //    (authoritative — a landed tx is found by signature lookup);
+    //  - `durableNonce` = the nonce account + the value the sent tx was baked
+    //    against, the poller's dropped-detection fallback (durable-nonce actions
+    //    only; a legacy `nonce_init` handle has none, so that branch omits it).
+    // Do NOT direct a fresh `prepare_solana_*` as clearance — a fresh handle
+    // re-executes the same transfer if the original landed (that is #797). Gate
+    // any new send behind a RESOLVED landing verdict from the status check.
+    const signature = getSolanaBroadcastSignature(args.handle);
+    const txHashArg = signature ?? "<broadcast signature unavailable>";
+    const nonce = draft.meta.nonce;
+    const statusCall = nonce
+      ? `get_transaction_status(chain='solana', txHash='${txHashArg}', ` +
+        `durableNonce={ noncePubkey: '${nonce.account}', nonceValue: '${nonce.value}' })`
+      : `get_transaction_status(chain='solana', txHash='${txHashArg}')`;
     throw new Error(
       `Refusing to re-preview Solana handle '${args.handle}': a broadcast was already ATTEMPTED ` +
         `on this handle and did not confirm success (e.g. a client timeout / abort / RPC error). ` +
-        `That tx MAY have LANDED on-chain and advanced the durable nonce — the client cannot tell ` +
-        `"never landed" from "landed but the response was lost". Re-previewing now would re-fetch ` +
-        `the advanced nonce and pin a SECOND, byte-different, independently-valid transaction that ` +
-        `REPEATS the transfer (a double-spend the signature dedupe cannot catch). ` +
-        `Do NOT re-preview or retry this handle. First verify whether the original tx landed: call ` +
-        `get_solana_transaction_status with the durableNonce from the send response (or check a ` +
-        `block explorer for the recipient/nonce). If it landed, the transfer is already done. If it ` +
-        `did NOT land, run prepare_solana_* again for a FRESH handle and send that. Issue #788.`,
+        `That tx MAY have LANDED on-chain${nonce ? " and advanced the durable nonce" : ""} — the client ` +
+        `cannot tell "never landed" from "landed but the response was lost". Re-previewing now would ` +
+        `${nonce ? "re-fetch the advanced nonce and " : ""}pin a SECOND, byte-different, independently-` +
+        `valid transaction that REPEATS the transfer (a double-spend the signature dedupe cannot catch). ` +
+        `Do NOT re-preview or retry this handle, and do NOT run prepare_solana_* for a fresh handle ` +
+        `either — a fresh handle re-executes the very same transfer if the original already landed ` +
+        `(issue #797). FIRST resolve whether the original landed by calling this tool VERBATIM: ` +
+        `${statusCall}. If it reports the tx confirmed/landed, the transfer is already done — do NOT ` +
+        `resend. If it reports the tx dropped (definitively never landed), only then is it safe to ` +
+        `start a new send. Issue #788.`,
     );
   }
 
@@ -782,16 +803,24 @@ export async function sendSolanaTransaction(args: SendTransactionArgs): Promise<
     messageBytes,
   ]);
 
-  // Issue #788 — mark the handle broadcast-ATTEMPTED immediately BEFORE the
-  // network call. From this point the outcome is AMBIGUOUS: an abort / client
-  // timeout / RPC error can unwind this path even though the node already
-  // accepted the tx and advanced the durable nonce. Because retire below is
-  // success-only, a throw from broadcastSolanaTx leaves the handle alive with
-  // this flag set — and `previewSolanaSend` refuses to re-pin it into a
-  // duplicate transfer. Placed AFTER signing so a definite pre-broadcast
-  // failure (gate mismatch, Ledger signing failure) — which cannot have
-  // landed — never sets the flag and never over-blocks a legitimate retry.
-  markSolanaBroadcastAttempted(args.handle);
+  // Issue #788 / #792 — mark the handle broadcast-ATTEMPTED immediately BEFORE
+  // the network call, persisting the signature (base58 txHash) in the SAME
+  // write. From this point the outcome is AMBIGUOUS: an abort / client timeout
+  // / RPC error can unwind this path even though the node already accepted the
+  // tx and advanced the durable nonce. Because retire below is success-only, a
+  // throw from broadcastSolanaTx leaves the handle alive with the flag set —
+  // and `previewSolanaSend` refuses to re-pin it into a duplicate transfer,
+  // routing the agent to `get_transaction_status` with this exact signature.
+  //
+  // Placed AFTER signing so failures BEFORE this point (gate mismatch, Ledger
+  // signing failure) — which cannot have landed — never over-block a retry.
+  // Failures AFTER it are deliberately fail-closed even when definite non-
+  // landings: a `skipPreflight: false` preflight reject inside broadcastSolanaTx
+  // never landed yet still trips the guard — accepted, since the client cannot
+  // in general tell a preflight reject from an abort-that-landed. The signature
+  // = first 64 bytes of `signedTxBytes` after the count byte (== the Ledger
+  // `signature`), base58-encoded, which IS the Solana transaction id.
+  markSolanaBroadcastAttempted(args.handle, bs58.encode(signature));
 
   const txSignature = await broadcastSolanaTx(signedTxBytes);
   // Retire the handle only after successful broadcast. A signing or
