@@ -234,16 +234,20 @@ const SPEC: readonly FnSpec[] = [
   { abi: eigenStrategyManagerAbi, fn: "depositIntoStrategy", paths: { strategy: "non-recipient", token: "non-recipient" } },
 
   // ── Uniswap V3 NonfungiblePositionManager ─────────────────────────────────
-  // `params.token0`/`token1` token-identity. `mint`/`collect.recipient` are
-  // user-choosable on the live standalone tools (prepare_uniswap_v3_mint/collect
-  // build `recipient = p.recipient ?? p.wallet`) → bucket 4, stamp-conditioned
-  // (D3). `multicall` → per-leg recursion (D7).
+  // `params.token0`/`token1` token-identity. `mint`/`collect.recipient` are a
+  // swap-output recipient — the same class as `swapRouter02.recipient`, which is
+  // already hard-gated — so they are HARD-GATE too (wallet-only, D4), not bucket 4:
+  // the bucket-4 "user sees it on-device before signing" premise is unverifiable,
+  // and an unstamped prepare_uniswap_v3_mint/collect(recipient=ATTACKER) otherwise
+  // passes (the #757 drain shape). Legit builds set recipient = wallet and clear
+  // the gate; a genuinely different recipient goes through Ledger Live directly.
+  // `multicall` → per-leg recursion (D7).
   {
     abi: uniswapPositionManagerAbi,
     fn: "mint",
-    paths: { "params.token0": "non-recipient", "params.token1": "non-recipient", "params.recipient": "user-directed" },
+    paths: { "params.token0": "non-recipient", "params.token1": "non-recipient", "params.recipient": "recipient" },
   },
-  { abi: uniswapPositionManagerAbi, fn: "collect", paths: { "params.recipient": "user-directed" } },
+  { abi: uniswapPositionManagerAbi, fn: "collect", paths: { "params.recipient": "recipient" } },
   { abi: uniswapPositionManagerAbi, fn: "multicall", paths: { data: "bytes-recurse" } },
 
   // ── Uniswap V3 SwapRouter02 ───────────────────────────────────────────────
