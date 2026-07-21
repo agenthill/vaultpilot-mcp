@@ -16,6 +16,7 @@ import {
   classifyLifiQuote,
   vetGenericSwapQuote,
   bridgeSuspectedUnreachable,
+  decodeGenericSwapReceiver,
   LIFI_DEFAULT_SLIPPAGE,
   MAX_EFFECTIVE_SLIPPAGE,
   type LifiQuoteLike,
@@ -125,9 +126,15 @@ function assertCrossChainAddressing(
  * Asserts:
  *   1. `BridgeData.destinationChainId` matches LiFi's chain ID for the
  *      requested `args.toChain`. Catches a `toChain` swap.
- *   2. `BridgeData.receiver`:
- *      - For EVM destinations: equals `args.toAddress` (or, if omitted,
- *        the source wallet — LiFi default behavior).
+ *   2. `BridgeData.receiver` (and, #798, the same-chain generic-swap
+ *      `_receiver`):
+ *      - For EVM destinations: the source wallet, UNLESS the caller
+ *        affirmatively set `acknowledgeNonWalletRecipient` for a
+ *        `toAddress` that differs from the wallet — see
+ *        `assertEvmReceiverAuthorized`. Trusting the raw agent-supplied
+ *        `toAddress` as the expected value was the #798 self-referential
+ *        hole: an attacker who set `toAddress` to their own address
+ *        compared it to itself and always passed.
  *      - For non-EVM destinations: is the LiFi non-EVM sentinel. The
  *        actual non-EVM address lives in the bridge-specific second arg
  *        (Wormhole-style `bytes32`, etc.) which we don't decode; the
@@ -154,6 +161,16 @@ function verifyLifiBridgeIntent(
           `calldata carrying a BridgeData tuple. Refusing to return calldata; ` +
           `re-run get_swap_quote.`,
       );
+    }
+    // #798 — same-chain generic-swap facet. The `_receiver` (index 3) is the
+    // on-chain recipient of the swap output; it was previously never decoded,
+    // so an attacker-supplied `toAddress` routed the proceeds away with no
+    // cross-check. Decode it and apply the same wallet/ack authorization the
+    // EVM bridge path uses. `undefined` = not a recognized generic-swap facet
+    // (nothing further to assert here).
+    const genericReceiver = decodeGenericSwapReceiver(data);
+    if (genericReceiver) {
+      assertEvmReceiverAuthorized(args, genericReceiver);
     }
     return;
   }
@@ -207,17 +224,57 @@ function verifyLifiBridgeIntent(
     return;
   }
 
-  // EVM destination — receiver must match either explicit toAddress or
-  // (when toAddress omitted) the source wallet.
-  const expectedReceiver = (args.toAddress ?? args.wallet) as `0x${string}`;
-  if (
-    getAddress(decoded.receiver) !== getAddress(expectedReceiver)
-  ) {
+  // EVM destination — receiver must be the source wallet unless a non-wallet
+  // toAddress was affirmatively acknowledged (#798).
+  assertEvmReceiverAuthorized(args, decoded.receiver as `0x${string}`);
+}
+
+/**
+ * #798 — enforce the authorized EVM receiver for a LiFi route (bridge
+ * `BridgeData.receiver` OR same-chain generic-swap `_receiver`).
+ *
+ * The decoded on-chain receiver must equal the source `wallet`, UNLESS the
+ * caller affirmatively acknowledged a non-wallet destination
+ * (`acknowledgeNonWalletRecipient`) for a `toAddress` that differs from the
+ * wallet — in which case it must equal that acknowledged `toAddress`.
+ *
+ * Before #798 the expected value was `args.toAddress ?? args.wallet`, i.e. the
+ * raw agent-supplied `toAddress`. That made the check self-referential: an
+ * attacker (e.g. a prompt-injected agent) who set `toAddress` to their own
+ * address had it compared to itself and always passed. The LiFi Diamond is a
+ * recognized destination, so the recipient-authorization pre-sign seam returns
+ * early on it (`recipient-authorization.ts` D8 / `dest.kind === "lifi-diamond"`)
+ * and this is the only receiver cross-check on the swap path. The ack does NOT
+ * relax any other pre-sign check; it only gates a non-wallet recipient so it is
+ * surfaced to the user, preserving the "swap to a different wallet I own" case.
+ */
+function assertEvmReceiverAuthorized(
+  args: PrepareSwapArgs,
+  decodedReceiver: `0x${string}`,
+): void {
+  const wallet = getAddress(args.wallet as `0x${string}`);
+  const receiver = getAddress(decodedReceiver);
+  const toAddr =
+    args.toAddress && /^0x[a-fA-F0-9]{40}$/.test(args.toAddress)
+      ? getAddress(args.toAddress as `0x${string}`)
+      : undefined;
+  const nonWallet = toAddr !== undefined && toAddr !== wallet;
+  if (nonWallet && args.acknowledgeNonWalletRecipient !== true) {
     throw new Error(
-      `LiFi bridge calldata receiver mismatch: encoded ${getAddress(decoded.receiver)} but ` +
-        `user requested ${getAddress(expectedReceiver)}. Refusing to return calldata — ` +
-        `this would route funds to a different recipient than the prepare receipt shows. ` +
-        `Re-run get_swap_quote.`,
+      `prepare_swap: toAddress (${toAddr}) is not your source wallet (${wallet}). ` +
+        `A swap/bridge that routes the output to a different address requires the ` +
+        `explicit \`acknowledgeNonWalletRecipient: true\` gate — confirm with the user ` +
+        `that they intend to send the proceeds to ${toAddr}, then retry with the flag. ` +
+        `Refusing to return calldata (an unacknowledged non-wallet destination is the ` +
+        `#798 fund-redirection shape).`,
+    );
+  }
+  const expected = nonWallet ? (toAddr as `0x${string}`) : wallet;
+  if (receiver !== expected) {
+    throw new Error(
+      `LiFi calldata receiver mismatch: encoded ${receiver} but expected ${expected}. ` +
+        `Refusing to return calldata — this would route funds to a different recipient ` +
+        `than authorized. Re-run get_swap_quote.`,
     );
   }
 }
@@ -1125,6 +1182,14 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
     ? mevExposureNote(chain, args.slippageBps ?? 50, fromAmountUsd)
     : undefined;
 
+  // #798 — surface the on-chain same-chain-swap recipient in the prepare
+  // receipt. It was verified against wallet/ack by `verifyLifiBridgeIntent`
+  // above; showing it makes a non-wallet destination visible to the user
+  // reviewing the tx (previously only the bridge receiver was ever decoded).
+  const decodedGenericReceiver = decodeGenericSwapReceiver(
+    txRequest.data as `0x${string}`,
+  );
+
   const swapTx: UnsignedTx = {
     chain,
     to: txRequest.to as `0x${string}`,
@@ -1139,6 +1204,9 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
         from: `${fromDisplay} ${fromSym}`,
         expectedOut: `${quotedToAmount} ${toSym}`,
         minOut: `${formatUnits(BigInt(quote.estimate.toAmountMin), quote.action.toToken.decimals)} ${toSym}`,
+        ...(decodedGenericReceiver
+          ? { receiver: getAddress(decodedGenericReceiver) }
+          : {}),
         // #685 — disclose the fee-aware slippage adjustment when a principal
         // skim was detected (display-only; changes no signed bytes beyond the
         // corrected min-out the re-quote already baked).

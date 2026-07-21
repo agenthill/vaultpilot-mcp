@@ -113,6 +113,26 @@ const baseSwapSchema = z.object({
         "that an unusually-high slippage is intentional — the default rejects the tx " +
         "to protect the user from MEV sandwich attacks."
     ),
+  // Issue #798 — affirmative gate for a non-wallet swap/bridge recipient. When
+  // `toAddress` names an address other than the source `wallet`, the on-chain
+  // receiver baked into the LiFi calldata routes the swap output away from the
+  // signer. Trusting the raw agent-supplied `toAddress` made the receiver
+  // cross-check self-referential (an attacker set `toAddress` to their own
+  // address and it matched itself). This flag forces the caller to state that a
+  // non-wallet destination is intentional so it is surfaced to the user before
+  // signing — the "swap to a different wallet I own" case is preserved, an
+  // injected `toAddress` with no ack is refused.
+  acknowledgeNonWalletRecipient: z
+    .boolean()
+    .optional()
+    .describe(
+      "Opt-in flag REQUIRED when `toAddress` is set to an address other than the " +
+        "source `wallet` on an EVM destination. Affirms that routing the swap/bridge " +
+        "proceeds to a different address is intentional. Without it, prepare_swap " +
+        "refuses a non-wallet `toAddress` — an attacker-supplied destination is exactly " +
+        "the #798 fund-redirection shape. Set only after the user has confirmed the " +
+        "exact destination address; it does not relax any other pre-sign check."
+    ),
   // Issue #411 — explicit DEX / bridge routing preferences. Without
   // these, LiFi picks whatever pool gives the best output (Sushi,
   // Uniswap, 1inch, KyberSwap, Paraswap, etc.). When the user names a
