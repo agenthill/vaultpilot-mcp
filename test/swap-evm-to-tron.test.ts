@@ -467,17 +467,21 @@ describe("verifyLifiBridgeIntent — chain-id swap detection", () => {
 });
 
 /**
- * Issue #237: NEAR Intents legitimately encodes its own pseudo-chain-id
- * (1885080386571452) in BridgeData.destinationChainId because the route
- * settles on NEAR and a relayer releases on the final chain off-chain.
- * The chainId-mismatch defense must allow this — but ONLY for a
- * hardcoded (bridge name, intermediate chain ID) pair that cannot be
- * tampered with by a compromised MCP / hostile aggregator at runtime.
+ * Issue #237 / #799: the chainId-mismatch defense previously ALLOWED a
+ * bridge='near' + destinationChainId=1885080386571452 pair via a hardcoded
+ * allowlist entry, on the premise that 1885080386571452 is NEAR Intents'
+ * settlement-chain pseudo-id. That value was never verified (it is not this
+ * codebase's TRON LiFi id 728126428, and no known-good NEAR route in the
+ * tree encodes it), so the false entry was REMOVED and the allowlist is now
+ * empty / fail-closed. Every mismatched destinationChainId is refused until
+ * a separately-verified id is added per the module's own rules (#237). The
+ * tamper-rejection cases below are unchanged; the former ALLOW case now
+ * refuses.
  */
-describe("verifyLifiBridgeIntent — NEAR Intents intermediate-chain allowlist", () => {
+describe("verifyLifiBridgeIntent — intermediate-chain allowlist fail-closed (#799)", () => {
   const NEAR_INTERMEDIATE_CHAIN_ID = 1885080386571452n;
 
-  it("ALLOWS ETH→TRON USDT via NEAR Intents — bridge='near' + chainId=NEAR pseudo-id + receiver=non-EVM sentinel", async () => {
+  it("REFUSES the former NEAR route — bridge='near' + 1885080386571452 no longer bypasses the chainId gate (#799)", async () => {
     fetchQuoteMock.mockResolvedValue(
       makeBridgeQuote({
         bridgeData: {
@@ -496,18 +500,17 @@ describe("verifyLifiBridgeIntent — NEAR Intents intermediate-chain allowlist",
     );
 
     const { prepareSwap } = await import("../src/modules/swap/index.js");
-    const tx = await prepareSwap({
-      wallet: EVM_WALLET,
-      fromChain: "ethereum",
-      toChain: "tron",
-      fromToken: ETH_USDT,
-      toToken: TRON_USDT,
-      toAddress: TRON_RECIPIENT,
-      amount: "10",
-    });
-    expect(tx.chain).toBe("ethereum");
-    expect(tx.to).toBe(LIFI_DIAMOND);
-    expect(tx.description).toContain("tron");
+    await expect(
+      prepareSwap({
+        wallet: EVM_WALLET,
+        fromChain: "ethereum",
+        toChain: "tron",
+        fromToken: ETH_USDT,
+        toToken: TRON_USDT,
+        toAddress: TRON_RECIPIENT,
+        amount: "10",
+      }),
+    ).rejects.toThrow(/destinationChainId mismatch/);
   });
 
   // Tamper-attempt 1: spoofed bridge name. An attacker-controlled
@@ -583,12 +586,13 @@ describe("verifyLifiBridgeIntent — NEAR Intents intermediate-chain allowlist",
     ).rejects.toThrow(/destinationChainId mismatch/);
   });
 
-  // Even when bridge=near + chainId=NEAR match, the non-EVM destination
-  // case still requires the receiver to be the non-EVM sentinel. The
-  // intermediate-chain allowlist relaxes ONLY the chainId equality, not
-  // the receiver-side checks — so an attacker can't pair a legit-looking
-  // (bridge, chainId) with an EVM receiver to exfiltrate funds.
-  it("REJECTS NEAR-bridge route with a real EVM receiver (receiver-side check still applies)", async () => {
+  // With the allowlist now empty (#799), a NEAR-shaped route with an
+  // attacker EVM receiver is refused at the chainId gate BEFORE the
+  // receiver-side check is reached. Either way the route is rejected; the
+  // reason is now the destinationChainId mismatch rather than the receiver
+  // mismatch. (The receiver-side sentinel check itself is exercised by the
+  // Solana/Wormhole tests whose destinationChainId legitimately matches.)
+  it("REJECTS NEAR-bridge route with a real EVM receiver (now refused at the chainId gate, #799)", async () => {
     const attackerEvmReceiver = "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead" as `0x${string}`;
     fetchQuoteMock.mockResolvedValue(
       makeBridgeQuote({
@@ -618,13 +622,14 @@ describe("verifyLifiBridgeIntent — NEAR Intents intermediate-chain allowlist",
         toAddress: TRON_RECIPIENT,
         amount: "10",
       }),
-    ).rejects.toThrow(/receiver mismatch for non-EVM destination tron/);
+    ).rejects.toThrow(/destinationChainId mismatch/);
   });
 
   // Same-chain requests should never produce intermediate-chain calldata.
-  // If LiFi (or a tampered MCP) hands us a NEAR-shaped bridge tx for a
-  // same-chain swap, refuse — the user wanted no bridging at all.
-  it("REJECTS NEAR-shaped calldata for a same-chain request (cross-chain-only invariant)", async () => {
+  // Pre-#799 this was refused by the intermediate-bridge same-chain guard;
+  // with the allowlist empty it is refused one step earlier at the
+  // destinationChainId gate. Still refused — the user wanted no bridging.
+  it("REJECTS NEAR-shaped calldata for a same-chain request (refused at the chainId gate, #799)", async () => {
     fetchQuoteMock.mockResolvedValue(
       makeBridgeQuote({
         bridgeData: {
@@ -658,6 +663,6 @@ describe("verifyLifiBridgeIntent — NEAR Intents intermediate-chain allowlist",
         toToken: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC
         amount: "10",
       }),
-    ).rejects.toThrow(/Intermediate-chain bridges are only valid for cross-chain/);
+    ).rejects.toThrow(/destinationChainId mismatch/);
   });
 });
