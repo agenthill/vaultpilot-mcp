@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { encodeFunctionData, maxUint256, zeroAddress } from "viem";
 import { erc20Abi } from "../src/abis/erc20.js";
+import { safeMultisigAbi } from "../src/abis/safe-multisig.js";
 
 // Aave V3 Pool on Ethereum (canonical). classifyDestination pins this address
 // from CONTRACTS — no RPC read — so any tx whose `to` equals AAVE_POOL_ETH is
@@ -720,10 +721,27 @@ describe("Pre-sign check: prepare_safe_tx_* origin flag (issue #609)", () => {
   });
 
   it("WITH safeTxOrigin=true — accepts execTransaction on the user's Safe", async () => {
-    // execTransaction selector (0x6a761202); calldata body irrelevant to the
-    // catch-all branch — the destination + selector class are what's tested.
+    // execTransaction selector (0x6a761202) wrapping a benign inner: a plain
+    // native send (empty inner data) back to the Safe itself. Issue #761 now
+    // DECODES the inner action from this outer calldata, so the body must be a
+    // realistic, decodable execTransaction rather than an all-zero placeholder.
     const { assertTransactionSafe } = await import("../src/signing/pre-sign-check.js");
-    const data = ("0x6a761202" + "00".repeat(32 * 10)) as `0x${string}`;
+    const data = encodeFunctionData({
+      abi: safeMultisigAbi,
+      functionName: "execTransaction",
+      args: [
+        SAFE_ADDRESS as `0x${string}`, // inner to (the Safe itself)
+        0n, // inner value
+        "0x", // inner data (plain native send)
+        0, // operation = CALL
+        0n, // safeTxGas
+        0n, // baseGas
+        0n, // gasPrice
+        zeroAddress, // gasToken
+        zeroAddress, // refundReceiver
+        "0x", // signatures
+      ],
+    });
     await expect(
       assertTransactionSafe({
         chain: "ethereum",

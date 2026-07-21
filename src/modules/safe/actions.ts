@@ -8,6 +8,7 @@ import {
   describeSafeTxBody,
   encodeApprovedHashSignature,
   SAFE_OP_CALL,
+  SAFE_OP_DELEGATECALL,
   type SafeTxBody,
 } from "./safe-tx.js";
 import { lookupSafeTx, rememberSafeTx } from "./safe-tx-store.js";
@@ -152,6 +153,18 @@ export async function prepareSafeTxPropose(
   const safeAddress = getAddress(args.safeAddress) as `0x${string}`;
   const signer = getAddress(args.signer) as `0x${string}`;
   const inner = resolveInnerAction(args);
+  // DELEGATECALL (operation 1) runs the inner target in the Safe's own storage
+  // context and can rewrite the Safe's owner set — a full takeover. Refuse to
+  // build it without the explicit affirmative opt-in (issue #761); the pre-sign
+  // inner-action gate refuses a DELEGATECALL that lacks the resulting stamp.
+  if (inner.operation === SAFE_OP_DELEGATECALL && args.acknowledgeSafeDelegateCall !== true) {
+    throw new Error(
+      `prepare_safe_tx_propose: inner operation is DELEGATECALL (operation=1), which runs the ` +
+        `target in the Safe's own storage context and can rewrite the Safe's owner set — a full ` +
+        `takeover risk. Refusing to build it without the explicit acknowledgeSafeDelegateCall: true ` +
+        `opt-in. Surface this trade-off to the user, then re-call with acknowledgeSafeDelegateCall: true.`,
+    );
+  }
   const nonce = await resolveNonce({
     chain,
     safeAddress,
@@ -180,6 +193,14 @@ export async function prepareSafeTxPropose(
       `to post the proposal to Safe Transaction Service.`,
     innerSummary,
   });
+
+  // Stamp the affirmative DELEGATECALL opt-in (issue #761) so the pre-sign
+  // inner-action gate lets an acknowledged operation:1 tx through. Only set for
+  // operation:1 (the un-acked case already threw above); the flag flows through
+  // the server-minted handle store and is non-forgeable by the agent.
+  if (inner.operation === SAFE_OP_DELEGATECALL) {
+    tx.acknowledgedSafeDelegateCall = true;
+  }
 
   rememberSafeTx({ safeTxHash, chain, safeAddress, body, proposeHandle: tx.handle });
 

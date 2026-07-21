@@ -1,6 +1,8 @@
 import { decodeFunctionData, toFunctionSelector } from "viem";
 import { erc20Abi } from "../abis/erc20.js";
+import { safeMultisigAbi } from "../abis/safe-multisig.js";
 import { CONTRACTS } from "../config/contracts.js";
+import { lookupSafeTx } from "../modules/safe/safe-tx-store.js";
 import type { SupportedChain, UnsignedTx } from "../types/index.js";
 import {
   pinnedAavePool,
@@ -8,6 +10,7 @@ import {
   classifyDestination,
   acceptedSelectorSetForKind,
 } from "./recognized-destinations.js";
+import { assertRecipientsAuthorized } from "./recipient-authorization.js";
 
 // Re-export the recognition data so existing importers of pre-sign-check keep
 // working; the definitions live in recognized-destinations.ts so the
@@ -196,10 +199,18 @@ export async function assertTransactionSafe(tx: UnsignedTx): Promise<void> {
   //    (block 5 below) all stay active because they protect against
   //    distinct attack shapes the ack does not subsume.
   if (!dest) {
-    if (
-      tx.acknowledgedNonProtocolTarget === true ||
-      tx.safeTxOrigin === true
-    ) {
+    if (tx.safeTxOrigin === true) {
+      // Safe-origin OUTER tx (`approveHash` / `execTransaction` on the user's
+      // own Safe, which is never in any canonical allowlist). Do NOT wave it
+      // through on the stamp alone (issue #761): the OUTER selector carries no
+      // transferable authority, but the INNER action it authorizes does — an
+      // `transfer(attacker, balance)` or a DELEGATECALL takeover otherwise
+      // rides hidden behind the 4-byte-truncated inner `data`. Decode the
+      // inner action and re-apply the direct-call pre-sign defenses to it.
+      await assertSafeInnerActionSafe(tx);
+      return;
+    }
+    if (tx.acknowledgedNonProtocolTarget === true) {
       // Pre-sign defenses #2 (approve spender allowlist) and #3 (transfer
       // on unknown token) are already past; this catch-all is the right
       // place to cleanly accept the call.
@@ -263,4 +274,132 @@ export async function assertTransactionSafe(tx: UnsignedTx): Promise<void> {
         `Refusing to sign.`
     );
   }
+}
+
+/** The inner action a Safe `execTransaction` / `approveHash` OUTER tx authorizes. */
+interface SafeInnerAction {
+  to: `0x${string}`;
+  value: string;
+  data: `0x${string}`;
+  operation: 0 | 1;
+}
+
+/**
+ * Resolve the inner `(to, value, data, operation)` a `safeTxOrigin` OUTER tx
+ * ultimately authorizes (issue #761).
+ *
+ *  - `execTransaction(...)` — the inner tuple IS the OUTER calldata's own first
+ *    four args, decoded directly.
+ *  - `approveHash(safeTxHash)` — the inner body is not in the OUTER calldata; it
+ *    lives in the server-side safe-tx-store keyed by the hash (stashed by
+ *    `prepare_safe_tx_propose`). Returns `undefined` when the body is NOT in our
+ *    custody — an externally-proposed tx confirmed via `prepare_safe_tx_approve`,
+ *    or an expired cache entry. Those bytes were never held here, so there is
+ *    nothing to decode; the caller keeps the pre-#761 accept for that path (the
+ *    inner cannot be inspected from an `approveHash` hash alone).
+ *
+ * Throws (fail-closed) when the OUTER calldata does not decode against the Safe
+ * ABI or is neither of the two expected selectors — a `safeTxOrigin` tx should
+ * only ever be `approveHash` or `execTransaction`.
+ */
+function resolveSafeInnerAction(tx: UnsignedTx): SafeInnerAction | undefined {
+  const decoded = (() => {
+    try {
+      return decodeFunctionData({ abi: safeMultisigAbi, data: tx.data });
+    } catch {
+      throw new Error(
+        `Pre-sign check: refusing a Safe-origin (safeTxOrigin) transaction whose OUTER calldata ` +
+          `does not decode against the Safe ABI — a Safe-stamped tx must be approveHash(bytes32) ` +
+          `or execTransaction(...). Refusing to sign.`
+      );
+    }
+  })();
+  if (decoded.functionName === "execTransaction") {
+    const [to, value, data, operation] = decoded.args;
+    return { to, value: value.toString(), data, operation: operation === 1 ? 1 : 0 };
+  }
+  if (decoded.functionName === "approveHash") {
+    const [safeTxHash] = decoded.args;
+    const entry = lookupSafeTx(safeTxHash);
+    if (!entry) return undefined;
+    const b = entry.body;
+    return { to: b.to, value: b.value, data: b.data, operation: b.operation };
+  }
+  throw new Error(
+    `Pre-sign check: refusing a Safe-origin (safeTxOrigin) transaction whose OUTER selector ` +
+      `${tx.data.slice(0, 10)} is neither approveHash(bytes32) nor execTransaction(...). ` +
+      `Refusing to sign an unrecognized Safe call.`
+  );
+}
+
+/**
+ * Re-apply the direct-call pre-sign defenses to the INNER action a
+ * `safeTxOrigin` OUTER tx authorizes (issue #761). Without this, block 4 waved
+ * the OUTER `approveHash`/`execTransaction` through on the stamp alone and never
+ * looked at the inner call, so an inner `transfer(attacker, balance)` or a
+ * DELEGATECALL takeover rode through unexamined.
+ *
+ * Three defenses, mirroring what a direct `send_transaction` of the inner call
+ * would face:
+ *  (1) DELEGATECALL (`operation === 1`) is refused unless the user affirmatively
+ *      opted in at propose time (the non-forgeable `acknowledgedSafeDelegateCall`
+ *      stamp). It runs the inner target in the Safe's own storage context and can
+ *      rewrite the Safe's owner set — a full takeover.
+ *  (2) The block-level defenses (`assertTransactionSafe` — approve-spender
+ *      allowlist, transfer-on-unknown-token, unknown-destination, ABI-selector)
+ *      re-run against the INNER call. The inner tx carries NO `safeTxOrigin`
+ *      stamp, so an inner call to an UNKNOWN contract is refused rather than
+ *      waved through a second time.
+ *  (3) The recipient/authority hard-gate (`assertRecipientsAuthorized`) re-runs
+ *      against the inner call, treated as a provenance-stamped call (design #759
+ *      D3), with the SAFE as the comparand: the Safe is what actually moves
+ *      value/authority on the inner CALL (a legitimate protocol inner routes it
+ *      back to the Safe itself), so an inner recipient/spender pointing anywhere
+ *      else — e.g. `transfer(attacker, …)` on a recognized token — is the
+ *      #757/#761 drain shape and is refused.
+ */
+async function assertSafeInnerActionSafe(tx: UnsignedTx): Promise<void> {
+  const inner = resolveSafeInnerAction(tx);
+  // Inner body not in our custody (externally-proposed approve / expired cache):
+  // nothing to decode. Matches pre-#761 accept for that path — the inner cannot
+  // be inspected from an approveHash hash whose body we never held.
+  if (!inner) return;
+
+  if (inner.operation === 1 && tx.acknowledgedSafeDelegateCall !== true) {
+    throw new Error(
+      `Pre-sign check: refusing a Safe transaction whose inner operation is DELEGATECALL ` +
+        `(operation=1). DELEGATECALL runs ${inner.to} in your Safe's own storage context and can ` +
+        `rewrite the Safe's owner set — a full takeover of the Safe. If you truly intend a ` +
+        `DELEGATECALL, re-propose with the explicit acknowledgeSafeDelegateCall opt-in (surface ` +
+        `the trade-off to the user first), or perform it from the Safe web UI directly.`
+    );
+  }
+
+  // The Safe (the OUTER `to` for both approveHash and execTransaction) is the
+  // account whose value/authority the inner CALL moves, so it is the
+  // recipient-hard-gate comparand — the Safe-side analog of the connected-wallet
+  // comparand a direct call uses.
+  const safeAddress = tx.to;
+
+  const innerTx: UnsignedTx = {
+    chain: tx.chain,
+    to: inner.to,
+    data: inner.data,
+    value: inner.value,
+    from: safeAddress,
+    description: `Safe inner action of: ${tx.description}`,
+  };
+
+  // (2) Block-level defenses against the inner call. No safeTxOrigin stamp on
+  //     the inner tx, so an unknown inner destination is refused (block 4).
+  await assertTransactionSafe(innerTx);
+
+  // (3) Recipient/authority hard-gate against the inner call, stamped so a
+  //     `user-directed` arg (ERC-20 `transfer.to`) is hard-gated to the Safe.
+  const innerDest = await classifyDestination(tx.chain, inner.to);
+  assertRecipientsAuthorized(
+    { ...innerTx, acknowledgedNonProtocolTarget: true },
+    innerDest,
+    safeAddress
+  );
 }

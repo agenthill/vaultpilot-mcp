@@ -1330,6 +1330,23 @@ export interface UnsignedTx {
    */
   safeTxOrigin?: boolean;
   /**
+   * Set by `prepare_safe_tx_propose` ONLY when the user passed the affirmative
+   * `acknowledgeSafeDelegateCall: true` gate for an inner `operation: 1`
+   * (DELEGATECALL) Safe transaction. Read by the inner-action pre-sign gate
+   * (issue #761): a `safeTxOrigin` tx whose inner operation is DELEGATECALL is
+   * refused UNLESS this stamp is present. DELEGATECALL runs the inner target in
+   * the Safe's own storage context and can rewrite its owner set (a full
+   * takeover), so it must be a loud explicit opt-in rather than a plain
+   * accepted literal.
+   *
+   * Trust note: like the sibling stamps (`safeTxOrigin`,
+   * `acknowledgedNonProtocolTarget`), this flows through the server-minted
+   * handle store; the agent cannot fabricate it on a tx that didn't come
+   * through the propose path with the ack set. Setting it on any other path is
+   * a server bug, not a user-controllable lever.
+   */
+  acknowledgedSafeDelegateCall?: boolean;
+  /**
    * Set when the tx was built by a prepare_* tool that emits an
    * approve(spender, amount) where the spender is NOT in the canonical
    * protocol allowlist (Aave Pool, Compound Comet, Morpho Blue, Lido
