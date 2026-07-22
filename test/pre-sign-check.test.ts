@@ -705,7 +705,12 @@ describe("Pre-sign check: prepare_safe_tx_* origin flag (issue #609)", () => {
     ).rejects.toThrow(/refusing to sign against unknown contract/);
   });
 
-  it("WITH safeTxOrigin=true — accepts approveHash on the user's Safe", async () => {
+  it("WITH safeTxOrigin=true — FAILS CLOSED on an approveHash whose body is not in custody", async () => {
+    // Issue #761: the safeTxOrigin flag opens the catch-all, but the inner
+    // action must still be decoded and gated. An approveHash whose SafeTx body
+    // was never stashed here (externally proposed / expired cache) cannot be
+    // decoded, so it is REFUSED rather than accepted blind. (A resolvable
+    // Safe-origin tx — e.g. the execTransaction case below — still passes.)
     const { assertTransactionSafe } = await import("../src/signing/pre-sign-check.js");
     await expect(
       assertTransactionSafe({
@@ -717,7 +722,7 @@ describe("Pre-sign check: prepare_safe_tx_* origin flag (issue #609)", () => {
         description: "prepare_safe_tx_propose: approveHash",
         safeTxOrigin: true,
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow(/not in this server's custody/);
   });
 
   it("WITH safeTxOrigin=true — accepts execTransaction on the user's Safe", async () => {

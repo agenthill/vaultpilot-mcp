@@ -1,4 +1,4 @@
-import { decodeFunctionData, toFunctionSelector } from "viem";
+import { decodeFunctionData, toFunctionSelector, getAddress } from "viem";
 import { erc20Abi } from "../abis/erc20.js";
 import { safeMultisigAbi } from "../abis/safe-multisig.js";
 import { CONTRACTS } from "../config/contracts.js";
@@ -332,39 +332,99 @@ function resolveSafeInnerAction(tx: UnsignedTx): SafeInnerAction | undefined {
   );
 }
 
+/** Checksum-normalized address equality; a non-string / undefined side fails closed. */
+function addrEq(a: unknown, b: unknown): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  try {
+    return getAddress(a) === getAddress(b);
+  } catch {
+    return false;
+  }
+}
+
+/** Data that carries no function selector (a pure native send). */
+function isEmptyCalldata(data: string): boolean {
+  return data === "0x" || data === "0x0" || data === "0x00";
+}
+
 /**
  * Re-apply the direct-call pre-sign defenses to the INNER action a
  * `safeTxOrigin` OUTER tx authorizes (issue #761). Without this, block 4 waved
  * the OUTER `approveHash`/`execTransaction` through on the stamp alone and never
- * looked at the inner call, so an inner `transfer(attacker, balance)` or a
- * DELEGATECALL takeover rode through unexamined.
+ * looked at the inner call, so an inner `transfer(attacker, …)`, an inner native
+ * `{to: attacker, value: balance, data: "0x"}` drain, or a DELEGATECALL takeover
+ * rode through unexamined.
  *
- * Three defenses, mirroring what a direct `send_transaction` of the inner call
- * would face:
- *  (1) DELEGATECALL (`operation === 1`) is refused unless the user affirmatively
+ * The design intent (reviewer #761): gate the decoded inner action EXACTLY as a
+ * direct `send_transaction` of that same call would be gated — same comparand
+ * (the connected wallet), same buckets — NOT by forcing every inner recipient to
+ * equal the Safe (the over-block a prior revision shipped, which refused a
+ * legitimate `transfer(vendor)` or an `Aave withdraw(..., to=your wallet)`).
+ *
+ * Five defenses:
+ *  (0) FAIL CLOSED on an inner body we cannot resolve. `resolveSafeInnerAction`
+ *      returns undefined for an `approveHash` whose SafeTx body is NOT in this
+ *      server's custody — an externally-proposed tx (`prepare_safe_tx_approve`)
+ *      or an expired cache entry. We cannot inspect what we cannot decode, so
+ *      co-signing it blind is exactly how a malicious externally-proposed Safe
+ *      tx drains a co-signer. Refuse (a prior revision accepted it — reviewer
+ *      fail-open finding).
+ *  (1) A missing OUTER `from` refuses — the inner recipient gate must anchor to
+ *      the connected wallet, and there is none to check against.
+ *  (2) DELEGATECALL (`operation === 1`) is refused unless the user affirmatively
  *      opted in at propose time (the non-forgeable `acknowledgedSafeDelegateCall`
  *      stamp). It runs the inner target in the Safe's own storage context and can
  *      rewrite the Safe's owner set — a full takeover.
- *  (2) The block-level defenses (`assertTransactionSafe` — approve-spender
- *      allowlist, transfer-on-unknown-token, unknown-destination, ABI-selector)
- *      re-run against the INNER call. The inner tx carries NO `safeTxOrigin`
- *      stamp, so an inner call to an UNKNOWN contract is refused rather than
- *      waved through a second time.
- *  (3) The recipient/authority hard-gate (`assertRecipientsAuthorized`) re-runs
- *      against the inner call, treated as a provenance-stamped call (design #759
- *      D3), with the SAFE as the comparand: the Safe is what actually moves
- *      value/authority on the inner CALL (a legitimate protocol inner routes it
- *      back to the Safe itself), so an inner recipient/spender pointing anywhere
- *      else — e.g. `transfer(attacker, …)` on a recognized token — is the
- *      #757/#761 drain shape and is refused.
+ *  (3) NATIVE-VALUE gate (reviewer BLOCKING finding). A pure native send
+ *      (`value > 0`, empty `data`) is inspected by NO calldata-based check —
+ *      `assertTransactionSafe` block 1 returns on empty data and
+ *      `assertRecipientsAuthorized` early-returns on an unrecognized (null)
+ *      dest — so its recipient is otherwise ungated. Allow it ONLY to the
+ *      connected wallet, back to the Safe itself, or to a recognized protocol
+ *      destination; any other native recipient refuses.
+ *  (4) The direct-call block-level defenses (`assertTransactionSafe`) + the
+ *      recipient/authority seam (`assertRecipientsAuthorized`) re-run against the
+ *      inner call, UNSTAMPED and resolved against the connected wallet — the
+ *      identical treatment a direct send of the inner call receives. So a
+ *      protocol recipient-bucket arg (`Aave withdraw.to`, swap `recipient`, …)
+ *      pointing anywhere but your wallet refuses (the #757 drain shape), while a
+ *      user-directed `transfer.to` passes exactly as a direct transfer does — its
+ *      real recipient is surfaced to the user by `describeSafeTxBody`'s #761
+ *      inner-target line, the same on-device review a direct send relies on.
  */
 async function assertSafeInnerActionSafe(tx: UnsignedTx): Promise<void> {
   const inner = resolveSafeInnerAction(tx);
-  // Inner body not in our custody (externally-proposed approve / expired cache):
-  // nothing to decode. Matches pre-#761 accept for that path — the inner cannot
-  // be inspected from an approveHash hash whose body we never held.
-  if (!inner) return;
 
+  // (0) FAIL CLOSED — inner body not in our custody, so it cannot be decoded and
+  //     checked. Refusing to co-sign an unverifiable inner action.
+  if (!inner) {
+    throw new Error(
+      `Pre-sign check: refusing a Safe approveHash whose inner SafeTx body is not in this ` +
+        `server's custody — it was proposed elsewhere (or its cache entry expired), so the inner ` +
+        `action it authorizes cannot be decoded and gated. Co-signing an unverifiable inner action ` +
+        `is exactly how a malicious externally-proposed Safe tx drains a co-signer (#761). ` +
+        `Re-propose it through prepare_safe_tx_propose so the body is bound to the hash, or approve ` +
+        `it from the Safe web UI where you can read the decoded action before signing.`
+    );
+  }
+
+  // (1) The connected wallet (the Safe owner submitting this approveHash /
+  //     execTransaction) is the OUTER `tx.from` — the SAME comparand a DIRECT
+  //     call's recipient gate uses (design #759 D4), validated against the
+  //     connected WalletConnect account set by `enforceEvmRecipientAuthorization`
+  //     (which always runs after `assertTransactionSafe` in `runEvmPreSignGuards`).
+  //     A missing `from` fails closed here, mirroring that gate's D1 branch.
+  if (!tx.from) {
+    throw new Error(
+      `Pre-sign check: refusing a Safe-origin transaction with no 'from' account — the inner-action ` +
+        `recipient gate must anchor to your connected wallet, and there is none to check against. ` +
+        `Re-prepare the Safe tx with the sending owner set.`
+    );
+  }
+  const connectedWallet = tx.from as `0x${string}`;
+  const safeAddress = tx.to;
+
+  // (2) DELEGATECALL — a full-takeover primitive; loud explicit opt-in only.
   if (inner.operation === 1 && tx.acknowledgedSafeDelegateCall !== true) {
     throw new Error(
       `Pre-sign check: refusing a Safe transaction whose inner operation is DELEGATECALL ` +
@@ -375,31 +435,44 @@ async function assertSafeInnerActionSafe(tx: UnsignedTx): Promise<void> {
     );
   }
 
-  // The Safe (the OUTER `to` for both approveHash and execTransaction) is the
-  // account whose value/authority the inner CALL moves, so it is the
-  // recipient-hard-gate comparand — the Safe-side analog of the connected-wallet
-  // comparand a direct call uses.
-  const safeAddress = tx.to;
+  const innerDest = await classifyDestination(tx.chain, inner.to);
+
+  // (3) NATIVE-VALUE gate. A pure native send's recipient is gated nowhere else.
+  if (isEmptyCalldata(inner.data) && BigInt(inner.value || "0") > 0n) {
+    const authorized =
+      addrEq(inner.to, connectedWallet) ||
+      addrEq(inner.to, safeAddress) ||
+      innerDest !== null;
+    if (!authorized) {
+      throw new Error(
+        `Pre-sign check: refusing a Safe inner NATIVE transfer of ${inner.value} wei to ` +
+          `${inner.to} — a plain native send (no calldata) carries its recipient in a field no ` +
+          `other pre-sign check inspects, and ${inner.to} is neither your connected wallet ` +
+          `(${connectedWallet}), the Safe itself, nor a recognized protocol destination. An ` +
+          `unrecognized native recipient behind an approveHash/execTransaction is exactly the ` +
+          `#761 drain shape. Move it from the Safe web UI if you truly intend this recipient.`
+      );
+    }
+  }
 
   const innerTx: UnsignedTx = {
     chain: tx.chain,
     to: inner.to,
     data: inner.data,
     value: inner.value,
-    from: safeAddress,
+    from: connectedWallet,
     description: `Safe inner action of: ${tx.description}`,
   };
 
-  // (2) Block-level defenses against the inner call. No safeTxOrigin stamp on
-  //     the inner tx, so an unknown inner destination is refused (block 4).
+  // (4) Direct-call block-level defenses against the inner call. No safeTxOrigin
+  //     stamp on the inner tx, so an unknown inner destination with calldata is
+  //     refused (block 4) rather than waved through a second time.
   await assertTransactionSafe(innerTx);
 
-  // (3) Recipient/authority hard-gate against the inner call, stamped so a
-  //     `user-directed` arg (ERC-20 `transfer.to`) is hard-gated to the Safe.
-  const innerDest = await classifyDestination(tx.chain, inner.to);
-  assertRecipientsAuthorized(
-    { ...innerTx, acknowledgedNonProtocolTarget: true },
-    innerDest,
-    safeAddress
-  );
+  // (4) Recipient/authority seam — the SAME call a direct send makes (design
+  //     #759 D2/D3/D7): UNSTAMPED, resolved against the connected wallet. Do NOT
+  //     stamp it and do NOT pass the Safe as the comparand — that was the
+  //     over-block the reviewer rejected. Protocol recipient-bucket args are
+  //     hard-gated to your wallet; user-directed sends pass as a direct send does.
+  assertRecipientsAuthorized(innerTx, innerDest, connectedWallet);
 }
