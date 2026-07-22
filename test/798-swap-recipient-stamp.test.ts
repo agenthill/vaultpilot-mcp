@@ -14,13 +14,27 @@ import { lifiDiamondAbi, LIFI_BRIDGE_DATA_TUPLE } from "../src/abis/lifi-diamond
  *     with no cross-check.
  *
  * The LiFi Diamond is a recognized destination, so the recipient-authorization
- * pre-sign seam returns early on it (D8), leaving these swap-module checks as
- * the only receiver cross-check. #760 only closed the stamped
- * `prepare_custom_call` path (pre-sign block 4b).
+ * pre-sign seam returns early on it (D8), leaving these swap-module checks as the
+ * only receiver cross-check. #760 only closed the stamped `prepare_custom_call`
+ * path (pre-sign block 4b).
  *
- * Fix: `assertEvmReceiverAuthorized` requires the receiver to be the source
- * `wallet` UNLESS the caller affirmatively set `acknowledgeNonWalletRecipient`
- * for a differing `toAddress` (preserving the "swap to a wallet I own" case).
+ * FIRST rework attempt (REJECTED): gated a non-wallet receiver on an
+ * `acknowledgeNonWalletRecipient` zod flag. The threat actor is a prompt-injected
+ * agent that controls every tool arg, so it just sends
+ * `{toAddress: attacker, acknowledgeNonWalletRecipient: true}` — the flag it set
+ * itself authorizes its own address, identical to the original drain. There is no
+ * user-confirmed, unforgeable signal at this layer, and reusing the one genuine
+ * server stamp (`acknowledgedNonProtocolTarget`) is refused on the LiFi Diamond
+ * by pre-sign block 4b.
+ *
+ * SOUND fix (this branch, fail-closed / reviewer option (b)): the decoded EVM
+ * receiver MUST equal the source `wallet` — no acknowledge exception. A
+ * non-wallet EVM `toAddress` is refused at input (`assertCrossChainAddressing`)
+ * AND the decoded receiver is re-checked against the wallet
+ * (`assertEvmReceiverIsWallet`) as defense-in-depth against a compromised
+ * aggregator. The swap-to-a-different-EVM-wallet convenience is dropped. Non-EVM
+ * (solana/tron) destinations are unaffected — their real recipient lives in
+ * facet-specific data and is checked via the non-EVM sentinel, not this path.
  *
  * Mocks mirror `swap-evm-to-solana.test.ts` / `swap-lifi-minout.test.ts`.
  */
@@ -165,6 +179,13 @@ function makeBridgeQuote(receiver: `0x${string}`) {
   };
 }
 
+// Bypass TS excess-property checking so we can pass the (now-removed) forged
+// `acknowledgeNonWalletRecipient` flag exactly as a prompt-injected agent would
+// smuggle it, and assert the runtime refuses it regardless.
+type PrepareSwapFn = typeof import("../src/modules/swap/index.js").prepareSwap;
+type PrepareSwapArg = Parameters<PrepareSwapFn>[0];
+const asArgs = (o: Record<string, unknown>): PrepareSwapArg => o as unknown as PrepareSwapArg;
+
 beforeEach(() => {
   fetchQuoteMock.mockReset();
   evmClientStub.readContract.mockReset();
@@ -180,11 +201,55 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("#798 — prepare_swap refuses a non-wallet toAddress without an ack", () => {
-  it("REFUSES a same-chain swap with toAddress=<attacker> and no ack (the closed hole)", async () => {
-    // Attacker sets toAddress to their own address; LiFi legitimately bakes it
-    // as the generic-swap `_receiver`. On unfixed code this arg is never
-    // decoded, so prepareSwap returns signable calldata that drains to ATTACKER.
+describe("#798 — the REAL exploit shape is refused (forged ack does NOT authorize)", () => {
+  it("REFUSES a same-chain swap with BOTH toAddress=<attacker> AND acknowledgeNonWalletRecipient=true", async () => {
+    // This is the exact shape the reviewer named: a prompt-injected agent sets
+    // its own address as toAddress AND sets the acknowledge flag it controls.
+    // On the FIRST rework this passed (expected==toAddress==attacker==receiver)
+    // → drain. Fail-closed, the non-wallet EVM destination is refused whatever
+    // the flag says.
+    fetchQuoteMock.mockResolvedValue(makeGenericQuote(ATTACKER as `0x${string}`));
+
+    const { prepareSwap } = await import("../src/modules/swap/index.js");
+    await expect(
+      prepareSwap(
+        asArgs({
+          wallet: EVM_WALLET,
+          fromChain: "ethereum",
+          toChain: "ethereum",
+          fromToken: ETH_USDC,
+          toToken: ETH_USDT,
+          toAddress: ATTACKER,
+          amount: "10",
+          acknowledgeNonWalletRecipient: true, // forged — must NOT authorize
+        }),
+      ),
+    ).rejects.toThrow(/is not your source wallet/);
+  });
+
+  it("REFUSES a cross-chain bridge with BOTH toAddress=<attacker> AND acknowledgeNonWalletRecipient=true", async () => {
+    fetchQuoteMock.mockResolvedValue(makeBridgeQuote(ATTACKER as `0x${string}`));
+
+    const { prepareSwap } = await import("../src/modules/swap/index.js");
+    await expect(
+      prepareSwap(
+        asArgs({
+          wallet: EVM_WALLET,
+          fromChain: "ethereum",
+          toChain: "arbitrum",
+          fromToken: ETH_USDC,
+          toToken: ETH_USDC,
+          toAddress: ATTACKER,
+          amount: "10",
+          acknowledgeNonWalletRecipient: true, // forged — must NOT authorize
+        }),
+      ),
+    ).rejects.toThrow(/is not your source wallet/);
+  });
+});
+
+describe("#798 — a non-wallet toAddress is refused (no flag involved)", () => {
+  it("REFUSES a same-chain swap to <attacker> (input gate, fail-closed)", async () => {
     fetchQuoteMock.mockResolvedValue(makeGenericQuote(ATTACKER as `0x${string}`));
 
     const { prepareSwap } = await import("../src/modules/swap/index.js");
@@ -201,9 +266,44 @@ describe("#798 — prepare_swap refuses a non-wallet toAddress without an ack", 
     ).rejects.toThrow(/is not your source wallet/);
   });
 
-  it("REFUSES a cross-chain bridge with toAddress=<attacker> and no ack (self-referential compare)", async () => {
-    // On unfixed code `expectedReceiver = toAddress ?? wallet = ATTACKER`, so the
-    // decoded receiver (also ATTACKER) matches itself and passes.
+  it("REFUSES a same-chain swap even to a wallet-the-user-claims-to-own (convenience dropped)", async () => {
+    // Fail-closed drops the swap-to-my-other-wallet path outright: MY_OTHER_WALLET
+    // is indistinguishable from an attacker address at this layer.
+    fetchQuoteMock.mockResolvedValue(makeGenericQuote(MY_OTHER_WALLET as `0x${string}`));
+
+    const { prepareSwap } = await import("../src/modules/swap/index.js");
+    await expect(
+      prepareSwap({
+        wallet: EVM_WALLET,
+        fromChain: "ethereum",
+        toChain: "ethereum",
+        fromToken: ETH_USDC,
+        toToken: ETH_USDT,
+        toAddress: MY_OTHER_WALLET,
+        amount: "10",
+      }),
+    ).rejects.toThrow(/is not your source wallet/);
+  });
+
+  it("DEFENSE-IN-DEPTH: refuses when toAddress is omitted but the calldata receiver is <attacker> (compromised aggregator)", async () => {
+    // The input gate can't fire (no toAddress), so the decode-time
+    // assertEvmReceiverIsWallet must catch the injected non-wallet receiver.
+    fetchQuoteMock.mockResolvedValue(makeGenericQuote(ATTACKER as `0x${string}`));
+
+    const { prepareSwap } = await import("../src/modules/swap/index.js");
+    await expect(
+      prepareSwap({
+        wallet: EVM_WALLET,
+        fromChain: "ethereum",
+        toChain: "ethereum",
+        fromToken: ETH_USDC,
+        toToken: ETH_USDT,
+        amount: "10",
+      }),
+    ).rejects.toThrow(/receiver mismatch/);
+  });
+
+  it("DEFENSE-IN-DEPTH: refuses a cross-chain bridge whose calldata receiver is <attacker> with toAddress omitted", async () => {
     fetchQuoteMock.mockResolvedValue(makeBridgeQuote(ATTACKER as `0x${string}`));
 
     const { prepareSwap } = await import("../src/modules/swap/index.js");
@@ -214,37 +314,14 @@ describe("#798 — prepare_swap refuses a non-wallet toAddress without an ack", 
         toChain: "arbitrum",
         fromToken: ETH_USDC,
         toToken: ETH_USDC,
-        toAddress: ATTACKER,
         amount: "10",
       }),
-    ).rejects.toThrow(/is not your source wallet/);
+    ).rejects.toThrow(/receiver mismatch/);
   });
 });
 
-describe("#798 — legitimate flows preserved", () => {
-  it("PROCEEDS on a same-chain swap to a different wallet WITH the ack, and surfaces the receiver", async () => {
-    fetchQuoteMock.mockResolvedValue(makeGenericQuote(MY_OTHER_WALLET as `0x${string}`));
-
-    const { prepareSwap } = await import("../src/modules/swap/index.js");
-    const tx = await prepareSwap({
-      wallet: EVM_WALLET,
-      fromChain: "ethereum",
-      toChain: "ethereum",
-      fromToken: ETH_USDC,
-      toToken: ETH_USDT,
-      toAddress: MY_OTHER_WALLET,
-      amount: "10",
-      acknowledgeNonWalletRecipient: true,
-    });
-
-    expect(tx.to).toBe(LIFI_DIAMOND);
-    // Companion: the same-chain `_receiver` now appears in the decoded output.
-    expect((tx.decoded!.args as Record<string, unknown>).receiver).toBe(
-      getAddress(MY_OTHER_WALLET),
-    );
-  });
-
-  it("PROCEEDS on a same-chain swap with no toAddress (defaults to source wallet)", async () => {
+describe("#798 — legitimate wallet-receiver flows still proceed (no over-block)", () => {
+  it("PROCEEDS on a same-chain swap with no toAddress (receiver == source wallet) and surfaces the receiver", async () => {
     fetchQuoteMock.mockResolvedValue(makeGenericQuote(EVM_WALLET as `0x${string}`));
 
     const { prepareSwap } = await import("../src/modules/swap/index.js");
@@ -258,28 +335,46 @@ describe("#798 — legitimate flows preserved", () => {
     });
 
     expect(tx.to).toBe(LIFI_DIAMOND);
+    // Companion (KEEP): the same-chain `_receiver` appears in the decoded output.
     expect((tx.decoded!.args as Record<string, unknown>).receiver).toBe(
       getAddress(EVM_WALLET),
     );
   });
 
-  it("still REFUSES a non-wallet receiver even WITH the ack if the calldata receiver disagrees with toAddress", async () => {
-    // Ack present + toAddress = MY_OTHER_WALLET, but the baked calldata receiver
-    // is ATTACKER — a compromised aggregator swapping the receiver post-ack.
-    fetchQuoteMock.mockResolvedValue(makeGenericQuote(ATTACKER as `0x${string}`));
+  it("PROCEEDS with a redundant toAddress == source wallet (harmless)", async () => {
+    fetchQuoteMock.mockResolvedValue(makeGenericQuote(EVM_WALLET as `0x${string}`));
 
     const { prepareSwap } = await import("../src/modules/swap/index.js");
-    await expect(
-      prepareSwap({
-        wallet: EVM_WALLET,
-        fromChain: "ethereum",
-        toChain: "ethereum",
-        fromToken: ETH_USDC,
-        toToken: ETH_USDT,
-        toAddress: MY_OTHER_WALLET,
-        amount: "10",
-        acknowledgeNonWalletRecipient: true,
-      }),
-    ).rejects.toThrow(/receiver mismatch/);
+    const tx = await prepareSwap({
+      wallet: EVM_WALLET,
+      fromChain: "ethereum",
+      toChain: "ethereum",
+      fromToken: ETH_USDC,
+      toToken: ETH_USDT,
+      toAddress: EVM_WALLET,
+      amount: "10",
+    });
+
+    expect(tx.to).toBe(LIFI_DIAMOND);
+  });
+
+  it("PROCEEDS on a cross-chain bridge with receiver == source wallet and surfaces the bridge receiver", async () => {
+    // Extends the surfaced-receiver to the cross-chain bridge path.
+    fetchQuoteMock.mockResolvedValue(makeBridgeQuote(EVM_WALLET as `0x${string}`));
+
+    const { prepareSwap } = await import("../src/modules/swap/index.js");
+    const tx = await prepareSwap({
+      wallet: EVM_WALLET,
+      fromChain: "ethereum",
+      toChain: "arbitrum",
+      fromToken: ETH_USDC,
+      toToken: ETH_USDC,
+      amount: "10",
+    });
+
+    expect(tx.to).toBe(LIFI_DIAMOND);
+    expect((tx.decoded!.args as Record<string, unknown>).receiver).toBe(
+      getAddress(EVM_WALLET),
+    );
   });
 });

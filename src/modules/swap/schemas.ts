@@ -48,12 +48,17 @@ const baseSwapSchema = z.object({
     .max(80)
     .optional()
     .describe(
-      "Destination wallet. OMIT for same-chain-type swaps (defaults to the source " +
-        "wallet — LiFi behavior). REQUIRED when `toChain` is `\"solana\"` or " +
-        "`\"tron\"` because the source EVM hex wallet isn't a valid recipient on " +
-        "those chains. Format must match the destination chain (Solana base58 " +
-        "for `\"solana\"`, TRON base58 with T-prefix for `\"tron\"`, EVM hex " +
-        "otherwise)."
+      "Destination wallet. For an EVM destination it must be OMITTED or equal the " +
+        "source `wallet` — routing a same-chain/EVM swap's output to a DIFFERENT EVM " +
+        "address is refused (#798 fail-closed: at this layer there is no user-confirmed, " +
+        "unforgeable signal that a non-wallet EVM recipient is intentional, and a " +
+        "prompt-injected agent controls every tool arg, so the swap-to-another-EVM-wallet " +
+        "convenience is dropped rather than gated on an agent-settable flag). REQUIRED " +
+        "when `toChain` is `\"solana\"` or `\"tron\"` (the source EVM hex wallet isn't a " +
+        "valid recipient on those chains, and the real recipient lives in bridge-specific " +
+        "calldata the EVM receiver check does not touch). Format must match the " +
+        "destination chain (Solana base58 for `\"solana\"`, TRON base58 with T-prefix for " +
+        "`\"tron\"`, EVM hex otherwise)."
     ),
   amount: z
     .string()
@@ -113,26 +118,15 @@ const baseSwapSchema = z.object({
         "that an unusually-high slippage is intentional — the default rejects the tx " +
         "to protect the user from MEV sandwich attacks."
     ),
-  // Issue #798 — affirmative gate for a non-wallet swap/bridge recipient. When
-  // `toAddress` names an address other than the source `wallet`, the on-chain
-  // receiver baked into the LiFi calldata routes the swap output away from the
-  // signer. Trusting the raw agent-supplied `toAddress` made the receiver
-  // cross-check self-referential (an attacker set `toAddress` to their own
-  // address and it matched itself). This flag forces the caller to state that a
-  // non-wallet destination is intentional so it is surfaced to the user before
-  // signing — the "swap to a different wallet I own" case is preserved, an
-  // injected `toAddress` with no ack is refused.
-  acknowledgeNonWalletRecipient: z
-    .boolean()
-    .optional()
-    .describe(
-      "Opt-in flag REQUIRED when `toAddress` is set to an address other than the " +
-        "source `wallet` on an EVM destination. Affirms that routing the swap/bridge " +
-        "proceeds to a different address is intentional. Without it, prepare_swap " +
-        "refuses a non-wallet `toAddress` — an attacker-supplied destination is exactly " +
-        "the #798 fund-redirection shape. Set only after the user has confirmed the " +
-        "exact destination address; it does not relax any other pre-sign check."
-    ),
+  // Issue #798 — NOTE: there is deliberately NO `acknowledgeNonWalletRecipient`
+  // flag here. An agent-settable boolean cannot authorize a non-wallet EVM
+  // recipient: the threat actor is a prompt-injected agent that controls every
+  // tool arg, so it would simply set the flag alongside its own `toAddress` and
+  // the self-referential check would pass — the original #798 drain. The sound
+  // fix is fail-closed: a non-wallet EVM `toAddress` is refused outright (see
+  // `assertCrossChainAddressing` and `assertEvmReceiverIsWallet` in index.ts).
+  // The convenience of swapping to a different EVM wallet is dropped until a
+  // user-confirmed, unforgeable signal exists at this layer.
   // Issue #411 — explicit DEX / bridge routing preferences. Without
   // these, LiFi picks whatever pool gives the best output (Sushi,
   // Uniswap, 1inch, KyberSwap, Paraswap, etc.). When the user names a
