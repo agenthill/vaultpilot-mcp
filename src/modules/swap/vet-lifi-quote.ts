@@ -102,6 +102,31 @@ export function classifyLifiQuote(data: `0x${string}`): "generic" | "bridge" | "
 }
 
 /**
+ * #798 — decode the same-chain generic-swap `_receiver` (index 3, the shared
+ * `commonInputs._receiver` on every generic-swap facet in `lifiDiamondAbi`).
+ *
+ * The same-chain generic-swap path carries this recipient in the calldata but
+ * `verifyLifiBridgeIntent` never decoded it (only the cross-chain `BridgeData`
+ * tuple's `receiver` was checked), so an attacker-supplied `toAddress` set the
+ * on-chain receiver with no cross-check. Returns the receiver for a recognized
+ * generic-swap calldata, or `undefined` when the calldata is not a generic-swap
+ * facet (bridge calldata / unknown selector — those decode throws → undefined).
+ * Reuses `lifiDiamondAbi`, the exact ABI the reachability gate already decodes.
+ */
+export function decodeGenericSwapReceiver(
+  data: `0x${string}`,
+): `0x${string}` | undefined {
+  let decoded: { args?: readonly unknown[] };
+  try {
+    decoded = decodeFunctionData({ abi: lifiDiamondAbi, data });
+  } catch {
+    return undefined;
+  }
+  const receiver = (decoded.args ?? [])[3];
+  return typeof receiver === "string" ? (receiver as `0x${string}`) : undefined;
+}
+
+/**
  * The reachability gate for the GENERIC-SWAP class. Decodes `_swapData[]`,
  * walks the leg chain, sizes every principal skim as a same-token fraction, and
  * compares the applied slippage (baked min-out vs `estimate.toAmount`, both in

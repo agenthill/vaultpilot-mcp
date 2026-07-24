@@ -16,6 +16,7 @@ import {
   classifyLifiQuote,
   vetGenericSwapQuote,
   bridgeSuspectedUnreachable,
+  decodeGenericSwapReceiver,
   LIFI_DEFAULT_SLIPPAGE,
   MAX_EFFECTIVE_SLIPPAGE,
   type LifiQuoteLike,
@@ -106,6 +107,29 @@ function assertCrossChainAddressing(
           `or omit toAddress to default to the source wallet.`,
       );
     }
+    // #798 fail-closed — an EVM destination address that is NOT the source
+    // wallet is refused. The on-chain receiver baked into the LiFi calldata
+    // would route the swap output to that address, and at this layer there is
+    // no user-confirmed, unforgeable signal that a non-wallet recipient is
+    // intentional: the caller is a (potentially prompt-injected) agent that
+    // controls every arg, so any "acknowledge" flag it could set it would set
+    // for its own address too — the original #798 self-referential drain. We
+    // therefore drop the swap-to-a-different-EVM-wallet convenience rather than
+    // gate it on an agent-forgeable flag. (A redundant `toAddress === wallet`
+    // is harmless and allowed.) The decode-time `assertEvmReceiverIsWallet`
+    // check below is the defense-in-depth partner: it catches a compromised
+    // LiFi API that injects a non-wallet receiver even when `toAddress` is
+    // omitted or equal to the wallet.
+    if (getAddress(args.toAddress as `0x${string}`) !== getAddress(args.wallet as `0x${string}`)) {
+      throw new Error(
+        `prepare_swap: toAddress (${getAddress(args.toAddress as `0x${string}`)}) is not your ` +
+          `source wallet (${getAddress(args.wallet as `0x${string}`)}). Routing a swap/bridge's ` +
+          `EVM output to a different address is refused (#798 fund-redirection shape). There is ` +
+          `no acknowledge flag: a prompt-injected agent could set it for its own address, so the ` +
+          `swap-to-another-wallet path is disabled until a user-confirmed, unforgeable signal ` +
+          `exists. Omit toAddress (defaults to the source wallet) to proceed.`,
+      );
+    }
   }
 }
 
@@ -125,9 +149,15 @@ function assertCrossChainAddressing(
  * Asserts:
  *   1. `BridgeData.destinationChainId` matches LiFi's chain ID for the
  *      requested `args.toChain`. Catches a `toChain` swap.
- *   2. `BridgeData.receiver`:
- *      - For EVM destinations: equals `args.toAddress` (or, if omitted,
- *        the source wallet — LiFi default behavior).
+ *   2. `BridgeData.receiver` (and, #798, the same-chain generic-swap
+ *      `_receiver`):
+ *      - For EVM destinations: MUST be the source wallet, fail-closed —
+ *        see `assertEvmReceiverIsWallet`. Trusting the raw agent-supplied
+ *        `toAddress` as the expected value was the #798 self-referential
+ *        hole: an attacker who set `toAddress` to their own address
+ *        compared it to itself and always passed. There is no
+ *        acknowledge-flag exception: an agent-set flag is forgeable by the
+ *        same attacker, so a non-wallet EVM recipient is refused outright.
  *      - For non-EVM destinations: is the LiFi non-EVM sentinel. The
  *        actual non-EVM address lives in the bridge-specific second arg
  *        (Wormhole-style `bytes32`, etc.) which we don't decode; the
@@ -154,6 +184,16 @@ function verifyLifiBridgeIntent(
           `calldata carrying a BridgeData tuple. Refusing to return calldata; ` +
           `re-run get_swap_quote.`,
       );
+    }
+    // #798 — same-chain generic-swap facet. The `_receiver` (index 3) is the
+    // on-chain recipient of the swap output; it was previously never decoded,
+    // so an attacker-supplied `toAddress` routed the proceeds away with no
+    // cross-check. Decode it and apply the same wallet/ack authorization the
+    // EVM bridge path uses. `undefined` = not a recognized generic-swap facet
+    // (nothing further to assert here).
+    const genericReceiver = decodeGenericSwapReceiver(data);
+    if (genericReceiver) {
+      assertEvmReceiverIsWallet(args, genericReceiver);
     }
     return;
   }
@@ -207,17 +247,55 @@ function verifyLifiBridgeIntent(
     return;
   }
 
-  // EVM destination — receiver must match either explicit toAddress or
-  // (when toAddress omitted) the source wallet.
-  const expectedReceiver = (args.toAddress ?? args.wallet) as `0x${string}`;
-  if (
-    getAddress(decoded.receiver) !== getAddress(expectedReceiver)
-  ) {
+  // EVM destination — receiver must be the source wallet, fail-closed (#798).
+  assertEvmReceiverIsWallet(args, decoded.receiver as `0x${string}`);
+}
+
+/**
+ * #798 — enforce that the decoded EVM receiver of a LiFi route (bridge
+ * `BridgeData.receiver` OR same-chain generic-swap `_receiver`, index 3) is the
+ * source `wallet`. Fail-closed: there is NO exception.
+ *
+ * The expected receiver is `args.wallet` alone — never the agent-supplied
+ * `args.toAddress`. `wallet` is the one trusted anchor on this path: it is the
+ * address whose key must sign the returned tx, so a prompt-injected agent that
+ * forges it merely produces a tx it cannot sign, not a drain. Comparing the
+ * receiver to `toAddress` (the original bug) was self-referential — the attacker
+ * set `toAddress` to its own address and it matched itself — and NO agent-set
+ * "acknowledge" flag can repair that, because the same attacker sets the flag.
+ *
+ * The prior rework tried to gate a non-wallet receiver on
+ * `acknowledgeNonWalletRecipient`; that flag lives in the zod input schema, so
+ * the threat actor just sends `{toAddress: attacker, acknowledgeNonWalletRecipient: true}`
+ * and the check passes — identical to the original hole. The only sound outcome
+ * at this layer is to refuse a non-wallet EVM receiver outright (option (b) of
+ * the reviewer's note); option (a), a distinct server-set stamp, is not cleanly
+ * achievable here (any marker `prepareSwap` sets is a pure function of the same
+ * agent-controlled args, and the one genuine server stamp,
+ * `acknowledgedNonProtocolTarget`, is refused on the LiFi Diamond by
+ * `pre-sign-check.ts` block 4b). A non-wallet EVM `toAddress` is also refused
+ * earlier, at input, in `assertCrossChainAddressing`; this decode-time check is
+ * the defense-in-depth partner that also catches a compromised LiFi API which
+ * injects a non-wallet receiver even when `toAddress` was omitted or == wallet.
+ *
+ * The LiFi Diamond is a recognized destination, so the recipient-authorization
+ * pre-sign seam returns early on it (`recipient-authorization.ts` D8 /
+ * `dest.kind === "lifi-diamond"`) and this is the ONLY receiver cross-check on
+ * the swap path — hence it must be sound on its own.
+ */
+function assertEvmReceiverIsWallet(
+  args: PrepareSwapArgs,
+  decodedReceiver: `0x${string}`,
+): void {
+  const wallet = getAddress(args.wallet as `0x${string}`);
+  const receiver = getAddress(decodedReceiver);
+  if (receiver !== wallet) {
     throw new Error(
-      `LiFi bridge calldata receiver mismatch: encoded ${getAddress(decoded.receiver)} but ` +
-        `user requested ${getAddress(expectedReceiver)}. Refusing to return calldata — ` +
-        `this would route funds to a different recipient than the prepare receipt shows. ` +
-        `Re-run get_swap_quote.`,
+      `LiFi calldata receiver mismatch: encoded ${receiver} but the only authorized ` +
+        `EVM receiver is your source wallet ${wallet}. Refusing to return calldata — ` +
+        `this would route funds to a different recipient (#798 fund-redirection shape). ` +
+        `A non-wallet EVM destination is not supported; re-run get_swap_quote without a ` +
+        `differing toAddress.`,
     );
   }
 }
@@ -1125,6 +1203,23 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
     ? mevExposureNote(chain, args.slippageBps ?? 50, fromAmountUsd)
     : undefined;
 
+  // #798 — surface the on-chain recipient in the prepare receipt for BOTH the
+  // same-chain generic-swap path (`_receiver`, index 3) and the cross-chain
+  // bridge path (`BridgeData.receiver`). It was verified to equal the source
+  // wallet by `verifyLifiBridgeIntent` above (EVM destinations, fail-closed);
+  // showing it lets the user see the on-chain receiver of the tx they are about
+  // to sign. Non-EVM bridge receivers are the LiFi sentinel (the real address
+  // lives in facet-specific data we don't decode), so they are not surfaced
+  // here — the receipt's destination fields and the destinationChainId
+  // invariant cover that path.
+  const bridgeDecoded = tryDecodeLifiBridgeData(txRequest.data as `0x${string}`);
+  const toIsNonEvmDest = args.toChain === "solana" || args.toChain === "tron";
+  const decodedReceiver =
+    decodeGenericSwapReceiver(txRequest.data as `0x${string}`) ??
+    (bridgeDecoded && !toIsNonEvmDest
+      ? (bridgeDecoded.receiver as `0x${string}`)
+      : undefined);
+
   const swapTx: UnsignedTx = {
     chain,
     to: txRequest.to as `0x${string}`,
@@ -1139,6 +1234,9 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
         from: `${fromDisplay} ${fromSym}`,
         expectedOut: `${quotedToAmount} ${toSym}`,
         minOut: `${formatUnits(BigInt(quote.estimate.toAmountMin), quote.action.toToken.decimals)} ${toSym}`,
+        ...(decodedReceiver
+          ? { receiver: getAddress(decodedReceiver) }
+          : {}),
         // #685 — disclose the fee-aware slippage adjustment when a principal
         // skim was detected (display-only; changes no signed bytes beyond the
         // corrected min-out the re-quote already baked).
