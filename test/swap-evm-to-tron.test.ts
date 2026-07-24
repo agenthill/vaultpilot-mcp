@@ -300,9 +300,14 @@ describe("verifyLifiBridgeIntent — chain-id swap detection", () => {
     ).rejects.toThrow(/destinationChainId mismatch.*encoded 728126428.*toChain="solana"/);
   });
 
-  it("refuses calldata whose receiver disagrees with toAddress on EVM destinations", async () => {
-    // User asks ethereum → arbitrum to ARB_RECIPIENT. Calldata routes to a
-    // different EVM recipient.
+  it("refuses calldata whose encoded receiver is not the source wallet on EVM destinations (decode-time defense-in-depth)", async () => {
+    // #798 defense-in-depth. The caller passes toAddress == wallet, so the
+    // input gate (assertCrossChainAddressing) is satisfied — but a compromised
+    // LiFi API injects a DIFFERENT EVM receiver into the calldata. The
+    // decode-time gate (assertEvmReceiverIsWallet) must still refuse: the ONLY
+    // authorized EVM receiver is the source wallet, fail-closed. This is the
+    // exact "omitted-or-equal toAddress but tampered calldata receiver"
+    // scenario the source comments call out as the reason both gates exist.
     const attackerReceiver = "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead" as `0x${string}`;
     fetchQuoteMock.mockResolvedValue(
       makeBridgeQuote({
@@ -331,10 +336,15 @@ describe("verifyLifiBridgeIntent — chain-id swap detection", () => {
         toChain: "arbitrum",
         fromToken: ETH_USDT,
         toToken: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", // arb USDT
-        toAddress: ARB_RECIPIENT,
+        // toAddress == wallet: passes the input gate, so the decode-time
+        // receiver check is the sole line of defense that must reject the
+        // injected non-wallet receiver.
+        toAddress: EVM_WALLET,
         amount: "10",
       }),
-    ).rejects.toThrow(/receiver mismatch.*encoded 0xDead.*requested.*0x2222/i);
+    ).rejects.toThrow(
+      /receiver mismatch.*encoded 0xdead.*authorized EVM receiver is your source wallet 0x1111/i,
+    );
   });
 
   it("refuses calldata whose receiver is NOT the non-EVM sentinel for a non-EVM destination", async () => {
@@ -433,7 +443,11 @@ describe("verifyLifiBridgeIntent — chain-id swap detection", () => {
     }
   });
 
-  it("accepts a happy-path EVM-to-EVM bridge whose receiver matches toAddress", async () => {
+  it("accepts a happy-path EVM-to-EVM bridge whose receiver matches the source wallet", async () => {
+    // #798 fail-closed model: the only allowed EVM bridge output goes to the
+    // source wallet. Both toAddress and the encoded receiver equal the wallet
+    // (toAddress could equally be omitted), so the input gate and the
+    // decode-time receiver check both pass and the bridge proceeds.
     fetchQuoteMock.mockResolvedValue(
       makeBridgeQuote({
         bridgeData: {
@@ -442,7 +456,7 @@ describe("verifyLifiBridgeIntent — chain-id swap detection", () => {
           integrator: "vaultpilot-mcp",
           referrer: "0x0000000000000000000000000000000000000000",
           sendingAssetId: ETH_USDT.toLowerCase() as `0x${string}`,
-          receiver: ARB_RECIPIENT as `0x${string}`,
+          receiver: EVM_WALLET as `0x${string}`,
           minAmount: 9_900_000n,
           destinationChainId: 42161n,
           hasSourceSwaps: false,
@@ -458,11 +472,50 @@ describe("verifyLifiBridgeIntent — chain-id swap detection", () => {
       toChain: "arbitrum",
       fromToken: ETH_USDT,
       toToken: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
-      toAddress: ARB_RECIPIENT,
+      toAddress: EVM_WALLET,
       amount: "10",
     });
     expect(tx.chain).toBe("ethereum");
     expect(tx.description).toContain("Bridge");
+  });
+
+  it("refuses an EVM-to-EVM bridge to a non-wallet toAddress (#798 fund-redirection is disabled)", async () => {
+    // Locks in the #798 input-gate fix: routing a swap/bridge's EVM output to
+    // any address other than the source wallet is refused up front, with no
+    // acknowledge flag (a prompt-injected agent could forge one). ARB_RECIPIENT
+    // (0x2222…) != source wallet (0x1111…). The encoded receiver is set to the
+    // same non-wallet address so this stays a fund-redirection shape end to end.
+    fetchQuoteMock.mockResolvedValue(
+      makeBridgeQuote({
+        bridgeData: {
+          transactionId: ("0x" + "67".repeat(32)) as `0x${string}`,
+          bridge: "across",
+          integrator: "vaultpilot-mcp",
+          referrer: "0x0000000000000000000000000000000000000000",
+          sendingAssetId: ETH_USDT.toLowerCase() as `0x${string}`,
+          receiver: ARB_RECIPIENT as `0x${string}`,
+          minAmount: 9_900_000n,
+          destinationChainId: 42161n,
+          hasSourceSwaps: false,
+          hasDestinationCall: false,
+        },
+      }),
+    );
+
+    const { prepareSwap } = await import("../src/modules/swap/index.js");
+    await expect(
+      prepareSwap({
+        wallet: EVM_WALLET,
+        fromChain: "ethereum",
+        toChain: "arbitrum",
+        fromToken: ETH_USDT,
+        toToken: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+        toAddress: ARB_RECIPIENT, // 0x2222… != source wallet 0x1111…
+        amount: "10",
+      }),
+    ).rejects.toThrow(
+      /toAddress.*0x2222.*is not your source wallet.*0x1111.*#798 fund-redirection shape/i,
+    );
   });
 });
 
