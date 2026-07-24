@@ -1,4 +1,5 @@
-import { hashTypedData, pad, toHex } from "viem";
+import { decodeFunctionData, hashTypedData, pad, toHex } from "viem";
+import { erc20Abi } from "../../abis/erc20.js";
 import { CHAIN_IDS, type SupportedChain } from "../../types/index.js";
 
 /**
@@ -159,7 +160,34 @@ export function describeSafeTxBody(body: SafeTxBody): string[] {
     `  operation: ${body.operation === SAFE_OP_DELEGATECALL ? "DELEGATECALL ⚠ (high-risk: target executes in Safe's storage context)" : "CALL"}`,
     `  nonce:     ${body.nonce}`,
   ];
+  // #761: the 4-byte-truncated `data` line above hides WHERE an ERC-20
+  // transfer/approve routes value/authority (the `to` field is only the token
+  // contract, not the recipient). Decode and surface the inner recipient/spender
+  // explicitly so the user reads the real destination before signing.
+  const innerTarget = describeInnerErc20Target(body.data);
+  if (innerTarget) lines.push(innerTarget);
   return lines;
+}
+
+/**
+ * If `data` is an ERC-20 `transfer(to, amount)` or `approve(spender, amount)`,
+ * return a line naming the recipient/spender and amount. Returns `undefined`
+ * for any other (or undecodable) calldata — display-only, so it never throws.
+ */
+function describeInnerErc20Target(data: `0x${string}`): string | undefined {
+  if (!data || data.length < 10) return undefined;
+  try {
+    const decoded = decodeFunctionData({ abi: erc20Abi, data });
+    if (decoded.functionName === "transfer") {
+      return `  ⤷ ERC-20 transfer → recipient ${decoded.args[0]} (amount ${String(decoded.args[1])})`;
+    }
+    if (decoded.functionName === "approve") {
+      return `  ⤷ ERC-20 approve → spender ${decoded.args[0]} (allowance ${String(decoded.args[1])})`;
+    }
+  } catch {
+    // Not an ERC-20 transfer/approve (or undecodable) — nothing extra to show.
+  }
+  return undefined;
 }
 
 /**

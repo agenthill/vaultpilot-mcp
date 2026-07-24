@@ -78,6 +78,16 @@ export const prepareSafeTxProposeInput = z.object({
    * the threshold, displacing the others).
    */
   nonceOverride: z.string().regex(/^\d+$/).optional(),
+  /**
+   * Affirmative opt-in required for an inner `operation: 1` (DELEGATECALL) Safe
+   * transaction (issue #761). DELEGATECALL runs the inner target in the Safe's
+   * own storage context — it can rewrite the Safe's owner set (a full takeover),
+   * so the handler refuses to build a DELEGATECALL propose unless this is `true`
+   * and stamps `acknowledgedSafeDelegateCall` on the returned tx so the pre-sign
+   * inner-action gate lets the acknowledged case through. Ignored for
+   * `operation: 0` (CALL, the default).
+   */
+  acknowledgeSafeDelegateCall: z.literal(true).optional(),
 });
 
 /**
