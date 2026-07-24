@@ -5,30 +5,40 @@ import {
 } from "../src/modules/swap/intermediate-chain-bridges.js";
 
 /**
- * Pin the literal chain-ID values in INTERMEDIATE_CHAIN_BRIDGES so a
- * developer typo, accidental rebase fixup, or merge-conflict
- * mis-resolution that drifts the constant is caught at CI time.
+ * THIS IS A SECURITY TEST.
  *
- * THIS IS A SECURITY TEST. The whole tamper-resistance argument for the
- * chainId-mismatch defense's NEAR-Intents allowlist rests on the
- * intermediate chain ID being a hardcoded literal. If this test goes
- * red, do NOT update the expected value to make it pass — investigate
- * what changed in the source and why.
+ * #799: the former NEAR entry `{ bridgeName: "near", intermediateChainId:
+ * 1885080386571452n }` was an UNVERIFIED value that relaxed the
+ * chainId-mismatch fund-routing defense on a false premise (the literal is
+ * not this codebase's TRON LiFi id 728126428 and is not attested anywhere
+ * as NEAR's genuine settlement-chain id). It was REMOVED and the allowlist
+ * is now intentionally empty / fail-closed.
+ *
+ * These tests pin the REMOVAL: the false literal must not reappear, and
+ * every entry that IS ever added must satisfy the shape invariants. If a
+ * future PR restores intermediate-chain support for #237 it must add a
+ * SEPARATELY-VERIFIED id (per the module's "Adding a new entry" rules) and
+ * update the first test's guard deliberately — never by pasting 1885080386571452n back.
  */
-describe("INTERMEDIATE_CHAIN_BRIDGES — literal-value pin (security)", () => {
-  it("pins NEAR Intents at LiFi's published pseudo-chain ID (1885080386571452)", () => {
+describe("INTERMEDIATE_CHAIN_BRIDGES — false NEAR entry removed (security, #799)", () => {
+  it("does NOT contain the unverified NEAR literal 1885080386571452", () => {
+    // Regression pin for #799. RED on pre-fix source (the entry exists);
+    // GREEN once the false entry is removed.
+    const hasFalseLiteral = INTERMEDIATE_CHAIN_BRIDGES.some(
+      (e) => e.intermediateChainId === 1885080386571452n,
+    );
+    expect(hasFalseLiteral).toBe(false);
+
     const near = INTERMEDIATE_CHAIN_BRIDGES.find(
       (e) => e.bridgeName === "near",
     );
-    expect(near).toBeDefined();
-    // If THIS literal needs to change, the bridge protocol changed
-    // identifiers — confirm against li.quest/v1/chains and update both
-    // this test and the source constant in the same commit.
-    expect(near?.intermediateChainId).toBe(1885080386571452n);
+    expect(near).toBeUndefined();
   });
 
-  it("entries are immutable in shape — every entry has a non-empty lowercase bridge name and a positive bigint chain ID", () => {
-    expect(INTERMEDIATE_CHAIN_BRIDGES.length).toBeGreaterThan(0);
+  it("any entry present has a non-empty lowercase bridge name and a positive bigint chain ID (empty allowlist is valid)", () => {
+    // Empty is the current fail-closed state; assert shape only for
+    // whatever entries exist rather than requiring a non-empty table.
+    expect(INTERMEDIATE_CHAIN_BRIDGES.length).toBeGreaterThanOrEqual(0);
     for (const entry of INTERMEDIATE_CHAIN_BRIDGES) {
       expect(entry.bridgeName).toBe(entry.bridgeName.toLowerCase());
       expect(entry.bridgeName.length).toBeGreaterThan(0);
@@ -40,29 +50,32 @@ describe("INTERMEDIATE_CHAIN_BRIDGES — literal-value pin (security)", () => {
 });
 
 describe("matchIntermediateChainBridge", () => {
-  it("matches a NEAR-bridge / NEAR-chain-ID pair (case-insensitive on bridge name)", () => {
-    const m = matchIntermediateChainBridge({
-      bridge: "near",
-      destinationChainId: 1885080386571452n,
-    });
-    expect(m).not.toBeNull();
-    expect(m?.bridgeName).toBe("near");
-
-    // Case-insensitive: real LiFi responses use "near" lowercase, but
-    // a bridge label arriving as "NEAR" or "Near" should still match
-    // — the `===` security boundary is on the chain ID, not on case.
+  // #799 REGRESSION FALSIFIER. On pre-fix source this pair matched the
+  // allowlisted NEAR entry and returned a non-null match, relaxing the
+  // chainId-mismatch defense for the unverified id 1885080386571452. With
+  // the false entry removed the allowlist is empty, so the previously
+  // "allowed" (bridge, chainId) pair — including any case variant of the
+  // bridge label — must now return null (fail-closed). RED on unfixed code,
+  // GREEN with the fix.
+  it("REJECTS the removed NEAR pair — bridge='near' + 1885080386571452 no longer opens the gate (#799)", () => {
+    expect(
+      matchIntermediateChainBridge({
+        bridge: "near",
+        destinationChainId: 1885080386571452n,
+      }),
+    ).toBeNull();
     expect(
       matchIntermediateChainBridge({
         bridge: "NEAR",
         destinationChainId: 1885080386571452n,
       }),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       matchIntermediateChainBridge({
         bridge: "Near",
         destinationChainId: 1885080386571452n,
       }),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   it("REJECTS bridge=NEAR with a non-NEAR chain ID (chain-ID tamper attempt)", () => {

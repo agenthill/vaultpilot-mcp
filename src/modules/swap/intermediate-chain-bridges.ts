@@ -12,13 +12,20 @@
  * upstream MCP) returning calldata that secretly routes funds to an
  * attacker-controlled chain.
  *
- * But some bridge protocols legitimately settle on an intermediate chain and
- * release on the final chain off-chain. NEAR Intents is the canonical
- * example: ETH→TRON USDT routes deposit into a NEAR-bridge contract on
- * Ethereum, settle on NEAR, and a relayer releases USDT-TRC20 to the user's
- * TRON address. The on-chain `destinationChainId` is NEAR's pseudo-id
- * (`1885080386571452`, similar pattern to Solana's `1151111081099710`),
- * even though the user's final destination is genuinely TRON.
+ * Some bridge protocols legitimately settle on an intermediate chain and
+ * release on the final chain off-chain (NEAR Intents was the motivating
+ * case for ETH→TRON USDT: deposit into a bridge contract on Ethereum,
+ * settle off-chain, relayer releases USDT-TRC20 on TRON). For such a route
+ * the on-chain `destinationChainId` is a settlement-chain pseudo-id rather
+ * than the user's final destination.
+ *
+ * IMPORTANT (#799): this allowlist is currently EMPTY. The one entry it
+ * previously held mapped `bridge:"near"` to the pseudo-id `1885080386571452`
+ * on the UNVERIFIED premise that that literal is NEAR's settlement-chain id.
+ * It is not attested as such anywhere in this tree (and does not equal this
+ * codebase's TRON LiFi id `728126428`), so it was removed — see the array
+ * literal below and #237. Adding intermediate-chain support back requires a
+ * separately-verified id per the "Adding a new entry" rules below.
  *
  * This module narrows the chainId-mismatch defense to permit ONLY
  * specifically-allowlisted (bridge name, intermediate chain ID) pairs. The
@@ -86,11 +93,26 @@ export interface IntermediateChainBridge {
 }
 
 export const INTERMEDIATE_CHAIN_BRIDGES: ReadonlyArray<IntermediateChainBridge> = [
-  {
-    bridgeName: "near",
-    intermediateChainId: 1885080386571452n,
-    description: "NEAR Intents (intermediate-chain settlement on NEAR)",
-  },
+  // #799 — the former `{ bridgeName: "near", intermediateChainId:
+  // 1885080386571452n }` entry was REMOVED (fail-closed). The literal
+  // 1885080386571452 was never a verified NEAR settlement-chain id: it does
+  // NOT match this codebase's own TRON LiFi chain id (728126428, see
+  // `./lifi.ts`) and there is no captured known-good LiFi response in the
+  // tree attesting that a genuine NEAR-Intents route encodes it. #799
+  // reports the literal is in fact TRON's on-chain BridgeData id, not
+  // NEAR's. Either way the entry relaxed the chainId-mismatch fund-routing
+  // defense on an UNVERIFIED value — exactly the failure the "Adding a new
+  // entry" rules above (cross-check against the bridge's own docs + at least
+  // one independent route execution) exist to prevent, and which this entry
+  // never satisfied. Removal is fail-closed and defensible regardless of
+  // what the literal actually is.
+  //
+  // The original goal of this table (#237) must be reopened and closed by a
+  // SEPARATELY-VERIFIED id obtained per those rules — NOT by re-adding an
+  // unverified literal here. Do NOT re-derive the value from a single live
+  // network call in the PR that restores it. Until then this allowlist is
+  // intentionally empty and the defense is fail-closed: every
+  // `destinationChainId` mismatch is refused.
 ] as const;
 
 /**
