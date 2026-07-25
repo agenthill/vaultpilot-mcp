@@ -20,6 +20,7 @@ import {
   resolveApprovalCap,
 } from "../shared/approval.js";
 import { resolveTokenMeta } from "../shared/token-meta.js";
+import { applyMinOut } from "../shared/slippage.js";
 import {
   curveLegacyStableSwapAbi,
   curveStableNgFactoryAbi,
@@ -150,8 +151,7 @@ export async function buildCurveAddLiquidity(
       functionName: "calc_token_amount",
       args: [amountsBig, true],
     })) as bigint;
-    // expected * (10000 - slippageBps) / 10000
-    minLpOut = (expected * BigInt(10000 - p.slippageBps)) / 10000n;
+    minLpOut = applyMinOut(expected, p.slippageBps);
   } else {
     throw new Error(
       "prepare_curve_add_liquidity requires either `minLpOut` (explicit) or `slippageBps`. The pool's add_liquidity refuses without a slippage floor; setting one explicitly avoids MEV-adjacent loss.",
@@ -420,7 +420,7 @@ export async function buildCurveSwap(
       functionName: "get_dy",
       args: [BigInt(i), BigInt(j), dx],
     })) as bigint;
-    minDy = (expectedOut * BigInt(10000 - p.slippageBps)) / 10000n;
+    minDy = applyMinOut(expectedOut, p.slippageBps);
   } else {
     throw new Error(
       "prepare_curve_swap requires either `minOut` (explicit decimal-string uint256) or " +

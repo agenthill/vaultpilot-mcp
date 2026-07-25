@@ -20,6 +20,7 @@ import {
   type TrongridConstantResponse,
   type TrongridTriggerResponse,
 } from "./actions.js";
+import { applyMinOut } from "../shared/slippage.js";
 import type { UnsignedTronTx } from "../../types/index.js";
 
 /**
@@ -391,8 +392,7 @@ export async function buildTronSunswapSwap(
         `Insufficient liquidity along path [${path.join(", ")}]; refusing to prepare a swap that would revert.`,
     );
   }
-  // minOut = quotedOut * (10000 - slippageBps) / 10000
-  const minOutBase = (quotedOut * BigInt(10_000 - slippageBps)) / 10_000n;
+  const minOutBase = applyMinOut(quotedOut, slippageBps);
 
   // TRC-20 source flows require allowance on the V2 router. Per CLAUDE.md
   // ("Crypto/DeFi Transaction Preflight Checks: (4) approval status for
