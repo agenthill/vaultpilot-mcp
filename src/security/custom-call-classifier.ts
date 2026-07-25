@@ -52,7 +52,7 @@
  *
  * COMPLETENESS: this set reflects ARCH's threat-model enumeration; other
  * third-party-source→recipient selectors may exist and are pending a
- * qualified security review (issue #741).
+ * qualified security review (issue #764).
  */
 export interface SendFamilyGateEntry {
   /** 4-byte function selector, lowercase hex with 0x prefix. */
@@ -147,7 +147,7 @@ export function assertSendFamilyRecipientIsWallet(
       `\`acknowledgeKnownExfilPattern\` override cannot launder it. The only legitimate case is ` +
       `pulling to YOUR OWN WALLET (recipient == your wallet). Sending to someone else needs a ` +
       `recipient-verified send path, which does not exist yet — tracked as issue #756. ` +
-      `(issue #741)`,
+      `(issue #764)`,
   );
 }
 
