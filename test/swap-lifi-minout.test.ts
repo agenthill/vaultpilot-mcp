@@ -524,6 +524,42 @@ describe("#685 T6 — bridge with source-side skim SHIPS status quo + fires the 
   });
 });
 
+describe("#752 — bridge instrumentation runs AFTER verifyLifiBridgeIntent", () => {
+  it("does not increment the counter when the bridge guard REFUSEs on a receiver mismatch", async () => {
+    const swap = await import("../src/modules/swap/index.js");
+    swap.resetLifiBridgeSuspectedUnreachableCount();
+
+    const gross = 15_000_000_000n;
+    const ATTACKER = "0x9999999999999999999999999999999999999999" as `0x${string}`;
+    // Same source-side skim shape as T6's first case — bridgeSuspectedUnreachable
+    // would flag this quote if instrumentation ran before the guard below fires.
+    const q = makeBridgeQuote({
+      fromAmount: gross,
+      toAmount: 15_000_000_000_000_000_000_000n,
+      minAmount: gross, // exceeds the post-skim 14,962.5 USDC
+      feeCosts: [
+        {
+          name: "integrator fee",
+          token: { address: ETH_USDC, symbol: "USDC", decimals: 6, priceUSD: "1" },
+          amount: "37500000",
+          included: true,
+        },
+      ],
+      // != bridgeArgs.wallet — verifyLifiBridgeIntent's #798 receiver check REFUSEs.
+      receiver: ATTACKER,
+    });
+    fetchQuoteMock.mockResolvedValueOnce(q);
+
+    await expect(swap.prepareSwap(bridgeArgs)).rejects.toThrow(/receiver mismatch/);
+    // #752 — instrumentation is placed after verifyLifiBridgeIntent, so a route
+    // the guard REFUSEs must never be counted toward
+    // lifiBridgeSuspectedUnreachableCount (the exact metric PROD condition 2 uses
+    // to promote #745). On unfixed code (instrumentBridgeQuote called before the
+    // guard) this would already be 1 here.
+    expect(swap.lifiBridgeSuspectedUnreachableCount).toBe(0);
+  });
+});
+
 describe("#685 — fixture-replay tally (classifier + gate + bridge signal)", () => {
   it("classifies and gates representative fixtures with the expected tally", () => {
     const gross = 15_000_000_000n;
