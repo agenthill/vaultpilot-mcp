@@ -569,6 +569,34 @@ describe("buildCustomCall — selector classifier (issue #652)", () => {
     ).rejects.toThrow(/NOT[\s\S]*bypassable/);
   });
 
+  it("transferFrom(self,...) refusal doesn't unconditionally claim prepare_token_send handles it — the selector is shared with ERC-721 (issue #755)", async () => {
+    // 0x23b872dd's signature (address,address,uint256) is IDENTICAL for
+    // ERC-20 transferFrom and ERC-721 transferFrom — the classifier cannot
+    // tell the two apart from the selector alone, and no prepare_*-nft
+    // send tool exists yet (src/modules/nft/index.ts only exports
+    // read-only tools). Args here decode as a plausible NFT transferFrom
+    // (a small integer "tokenId" rather than a token amount); the refusal
+    // must not assert prepare_token_send unconditionally resolves it.
+    let caught: Error | undefined;
+    try {
+      await buildCustomCall({
+        wallet: WALLET,
+        chain: "ethereum",
+        contract: USDC,
+        fn: "transferFrom",
+        args: [WALLET, ATTACKER, "1"],
+        value: "0",
+        abi: ERC20_TRANSFER_FROM_ABI as unknown as readonly unknown[],
+        acknowledgeKnownExfilPattern: true,
+      });
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught?.message).toMatch(/identical for ERC-20 and ERC-721 transferFrom/);
+    expect(caught?.message).toMatch(/no dedicated send tool exists yet/);
+  });
+
   it("self-as-from comparison is case-insensitive on the wallet hex", async () => {
     // Wallet is a checksummed 0xC0f5… address; from-arg is the same
     // hex lowercased. The check must canonicalize both sides.
@@ -636,6 +664,30 @@ describe("buildCustomCall — selector classifier (issue #652)", () => {
         acknowledgeKnownExfilPattern: true,
       }),
     ).rejects.toThrow(/CUSTOM_CALL_REFUSED[\s\S]*NOT[\s\S]*bypassable/);
+  });
+
+  it("transferFrom(other, ATTACKER) refusal doesn't unconditionally claim prepare_token_send handles it — the selector is shared with ERC-721 (issue #755)", async () => {
+    // Same ERC-20/ERC-721 ambiguity as the self-as-from case above, but on
+    // the recipient-mismatch throw path (args[1] != wallet). Args decode
+    // as a plausible NFT transferFrom (small integer "tokenId").
+    let caught: Error | undefined;
+    try {
+      await buildCustomCall({
+        wallet: WALLET,
+        chain: "ethereum",
+        contract: USDC,
+        fn: "transferFrom",
+        args: [ANOTHER_WALLET, ATTACKER, "1"],
+        value: "0",
+        abi: ERC20_TRANSFER_FROM_ABI as unknown as readonly unknown[],
+        acknowledgeKnownExfilPattern: true,
+      });
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught?.message).toMatch(/identical for ERC-20 and ERC-721 transferFrom/);
+    expect(caught?.message).toMatch(/no dedicated send tool exists yet/);
   });
 
   it("recipient check is case-insensitive on the wallet hex (issue #711)", async () => {
@@ -985,25 +1037,32 @@ describe("buildCustomCall — send-family recipient gate (issue #741)", () => {
 });
 
 describe("assertSendFamilyRecipientIsWallet — unit (issue #741)", () => {
+  // Issue #755 — the function now takes the already-matched gate entry
+  // (what the sole real caller, buildCustomCall, computes once via
+  // matchSendFamilyGate and passes in) instead of re-matching raw `data`
+  // internally, so these tests match the selector first.
   it("throws non-bypassably when a matched selector's recipient is not the wallet", () => {
     // operatorSend selector + recipientIsWallet=false — the deny-by-default
     // verdict the caller computes on a missing/non-wallet recipient arg.
+    const entry = matchSendFamilyGate("0x62ad1b83deadbeef");
     expect(() =>
-      assertSendFamilyRecipientIsWallet("0x62ad1b83deadbeef", false),
+      assertSendFamilyRecipientIsWallet(entry, false),
     ).toThrow(/CUSTOM_CALL_REFUSED[\s\S]*NOT[\s\S]*bypassable/);
   });
 
   it("is a no-op when the recipient is the wallet", () => {
+    const entry = matchSendFamilyGate("0x62ad1b83deadbeef");
     expect(() =>
-      assertSendFamilyRecipientIsWallet("0x62ad1b83deadbeef", true),
+      assertSendFamilyRecipientIsWallet(entry, true),
     ).not.toThrow();
   });
 
   it("does not fire for a non-member selector (transferFrom is #727's, not here)", () => {
-    expect(matchSendFamilyGate("0x23b872dd00000000")).toBeNull();
+    const entry = matchSendFamilyGate("0x23b872dd00000000");
+    expect(entry).toBeNull();
     // Even with recipientIsWallet=false, a non-member selector is untouched.
     expect(() =>
-      assertSendFamilyRecipientIsWallet("0x23b872dd00000000", false),
+      assertSendFamilyRecipientIsWallet(entry, false),
     ).not.toThrow();
   });
 });

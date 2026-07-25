@@ -160,13 +160,22 @@ export async function buildCustomCall(p: BuildCustomCallParams): Promise<Unsigne
   // — pull-to-self (recipient == wallet) falls through to the existing
   // verdict (ERC-721 safeTransferFrom keeps its #652 warn; the rest are
   // unclassified).
+  //
+  // INVARIANT: `data` must be `encodeFunctionData({ abi, functionName: p.fn,
+  // args: p.args })` output (see the top of this function) — the recipient
+  // arg checked below is only as trustworthy as that encoding. A future
+  // refactor that accepts pre-encoded calldata directly would silently
+  // decouple the checked recipient from the recipient actually being signed.
   const sendFamilyGate = matchSendFamilyGate(data);
   const sendFamilyRecipientIsWallet =
     sendFamilyGate === null ||
     (p.args.length > sendFamilyGate.recipientArgIndex &&
       String(p.args[sendFamilyGate.recipientArgIndex] ?? "").toLowerCase() ===
         p.wallet.toLowerCase());
-  assertSendFamilyRecipientIsWallet(data, sendFamilyRecipientIsWallet);
+  // Pass the already-matched entry in rather than re-matching `data` inside
+  // assertSendFamilyRecipientIsWallet (issue #755) — matchSendFamilyGate is a
+  // cheap linear scan, but there is no reason to run it twice per call.
+  assertSendFamilyRecipientIsWallet(sendFamilyGate, sendFamilyRecipientIsWallet);
 
   const classifierVerdict = applyCustomCallClassifier(
     data,
