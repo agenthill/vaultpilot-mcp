@@ -152,18 +152,41 @@ describe("isToolEnabled — env-var integration", () => {
   beforeEach(() => vi.resetModules());
   afterEach(() => vi.unstubAllEnvs());
 
-  it("default (no env vars) — every tool registered", async () => {
+  /**
+   * #733 — UPDATED, not weakened: this asserted "every tool registered" before
+   * the flip. Falsifier for the default flip at the `isToolEnabled` level — on
+   * unfixed code every `false` expectation below is `true`.
+   */
+  it("default (no env vars) — EVM family + core only, no other family, no protocol", async () => {
     vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "");
     vi.stubEnv("VAULTPILOT_PROTOCOLS", "");
-    const { isToolEnabled } = await import("../src/config/scope.js");
-    expect(isToolEnabled("prepare_solana_native_send")).toBe(true);
-    expect(isToolEnabled("prepare_aave_supply")).toBe(true);
-    expect(isToolEnabled("prepare_btc_send")).toBe(true);
+    const { isToolEnabled, getEnabledFamilies, getEnabledProtocols } = await import(
+      "../src/config/scope.js"
+    );
+    expect([...getEnabledFamilies()].sort()).toEqual(["evm"]);
+    expect([...(getEnabledProtocols() ?? [])]).toEqual([]);
+    // EVM family + core stay on.
+    expect(isToolEnabled("prepare_native_send")).toBe(true);
+    expect(isToolEnabled("preview_send")).toBe(true);
     expect(isToolEnabled("get_portfolio_summary")).toBe(true);
+    // Every other family is opt-in now.
+    expect(isToolEnabled("prepare_solana_native_send")).toBe(false);
+    expect(isToolEnabled("prepare_tron_native_send")).toBe(false);
+    expect(isToolEnabled("prepare_sunswap_swap")).toBe(false);
+    expect(isToolEnabled("prepare_btc_send")).toBe(false);
+    expect(isToolEnabled("prepare_litecoin_native_send")).toBe(false);
+    // Every protocol is opt-in now — including the EVM-family ones.
+    expect(isToolEnabled("prepare_aave_supply")).toBe(false);
+    expect(isToolEnabled("prepare_lido_stake")).toBe(false);
+    expect(isToolEnabled("prepare_uniswap_swap")).toBe(false);
+    expect(isToolEnabled("prepare_marginfi_supply")).toBe(false);
   });
 
   it("VAULTPILOT_CHAIN_FAMILIES=evm drops solana/tron/btc/ltc family tools", async () => {
     vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "evm");
+    // #733: the protocol axis defaults to ∅, so it has to be opened
+    // explicitly for this test to isolate the FAMILY axis it is about.
+    vi.stubEnv("VAULTPILOT_PROTOCOLS", "all");
     const { isToolEnabled } = await import("../src/config/scope.js");
     expect(isToolEnabled("prepare_aave_supply")).toBe(true);
     expect(isToolEnabled("prepare_native_send")).toBe(true);
@@ -208,6 +231,9 @@ describe("isToolEnabled — env-var integration", () => {
 
   it("accepts chain-name aliases — bitcoin → btc, litecoin → ltc, ethereum → evm", async () => {
     vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "ethereum,bitcoin");
+    // #733: open the protocol axis so `prepare_aave_supply` below still
+    // exercises the alias mapping rather than the new protocol default.
+    vi.stubEnv("VAULTPILOT_PROTOCOLS", "all");
     const { isToolEnabled, getEnabledFamilies } = await import("../src/config/scope.js");
     const families = [...getEnabledFamilies()].sort();
     expect(families).toEqual(["btc", "evm"]);
@@ -223,11 +249,116 @@ describe("isToolEnabled — env-var integration", () => {
     expect(families).toEqual(["btc", "evm", "ltc", "solana", "tron"]);
   });
 
-  it("VAULTPILOT_PROTOCOLS unset → null (all protocols allowed)", async () => {
+  /**
+   * #733 — UPDATED, not weakened: unset used to mean `null` (accept-all); it
+   * now means the empty set, and `null` needs the explicit `all` token below.
+   */
+  it("VAULTPILOT_PROTOCOLS unset → empty set (protocols are opt-in)", async () => {
     vi.stubEnv("VAULTPILOT_PROTOCOLS", "");
-    const { getEnabledProtocols } = await import("../src/config/scope.js");
-    expect(getEnabledProtocols()).toBeNull();
+    const { getEnabledProtocols, isToolEnabled } = await import("../src/config/scope.js");
+    const protocols = getEnabledProtocols();
+    expect(protocols).not.toBeNull();
+    expect([...(protocols ?? [])]).toEqual([]);
+    expect(isToolEnabled("prepare_aave_supply")).toBe(false);
   });
+
+  it("VAULTPILOT_PROTOCOLS=all → null sentinel (accept every protocol)", async () => {
+    vi.stubEnv("VAULTPILOT_PROTOCOLS", "all");
+    const { getEnabledProtocols, isToolEnabled } = await import("../src/config/scope.js");
+    expect(getEnabledProtocols()).toBeNull();
+    expect(isToolEnabled("prepare_aave_supply")).toBe(true);
+    expect(isToolEnabled("prepare_rocketpool_stake")).toBe(true);
+    // Family axis is untouched by the protocol escape hatch — Solana
+    // protocols stay off because the family is still scoped out.
+    expect(isToolEnabled("prepare_marginfi_supply")).toBe(false);
+  });
+});
+
+/**
+ * #733 — explicit-config parity: the flip narrows only the UNSET case, and
+ * `all` is the escape hatch back to the pre-flip surface.
+ */
+describe("explicit config parity + `all` escape hatch (#733)", () => {
+  beforeEach(() => vi.resetModules());
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("VAULTPILOT_CHAIN_FAMILIES=all + VAULTPILOT_PROTOCOLS=all restores the pre-flip surface", async () => {
+    vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "all");
+    vi.stubEnv("VAULTPILOT_PROTOCOLS", "all");
+    const { isToolEnabled, getEnabledFamilies, getEnabledProtocols } = await import(
+      "../src/config/scope.js"
+    );
+    expect([...getEnabledFamilies()].sort()).toEqual(["btc", "evm", "ltc", "solana", "tron"]);
+    expect(getEnabledProtocols()).toBeNull();
+    for (const name of [
+      "prepare_native_send", "prepare_solana_native_send", "prepare_tron_native_send",
+      "prepare_sunswap_swap", "prepare_btc_send", "prepare_litecoin_native_send",
+      "prepare_aave_supply", "prepare_marginfi_supply", "get_portfolio_summary",
+    ]) {
+      expect(isToolEnabled(name)).toBe(true);
+    }
+  });
+
+  it("VAULTPILOT_CHAIN_FAMILIES=all opens every family but NOT the protocol axis", async () => {
+    vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "all");
+    const { isToolEnabled, getEnabledFamilies } = await import("../src/config/scope.js");
+    expect([...getEnabledFamilies()].sort()).toEqual(["btc", "evm", "ltc", "solana", "tron"]);
+    expect(isToolEnabled("prepare_btc_send")).toBe(true);
+    expect(isToolEnabled("prepare_aave_supply")).toBe(false); // axes are independent
+  });
+
+  it("a named family list still means exactly that list (unchanged by the flip)", async () => {
+    vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "solana,tron");
+    const { isToolEnabled, getEnabledFamilies } = await import("../src/config/scope.js");
+    expect([...getEnabledFamilies()].sort()).toEqual(["solana", "tron"]);
+    expect(isToolEnabled("prepare_solana_native_send")).toBe(true);
+    expect(isToolEnabled("prepare_tron_native_send")).toBe(true);
+    expect(isToolEnabled("prepare_native_send")).toBe(false); // evm not named
+    expect(isToolEnabled("get_portfolio_summary")).toBe(true); // core stays
+  });
+});
+
+/**
+ * #733 — scope-friction observability. Scoped-out tools are never registered,
+ * so no per-call refusal exists to count; these accessors are the friction
+ * signal, feeding the config-status `scope` block and the startup log line.
+ */
+describe("scoped-out enumeration + enable hint (#733)", () => {
+  beforeEach(() => vi.resetModules());
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("default config enumerates the scoped-out families/protocols + enable hint", async () => {
+    vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "");
+    vi.stubEnv("VAULTPILOT_PROTOCOLS", "");
+    const { getScopedOutFamilies, getScopedOutProtocols, getScopeEnableHint } = await import(
+      "../src/config/scope.js"
+    );
+    expect(getScopedOutFamilies()).toEqual(["btc", "ltc", "solana", "tron"]);
+    expect(getScopedOutProtocols()).toEqual([
+      "aave", "compound", "curve", "eigenlayer", "jito", "kamino", "lido",
+      "marginfi", "marinade", "morpho", "rocketpool", "safe", "uniswap",
+    ]);
+    const hint = getScopeEnableHint();
+    expect(hint).toContain("VAULTPILOT_CHAIN_FAMILIES=btc,evm,ltc,solana,tron");
+    expect(hint).toContain("VAULTPILOT_PROTOCOLS=");
+    expect(hint).toContain("restart the client");
+    // One line — an operator reads it off stderr / a status blob.
+    expect(hint).not.toContain("\n");
+  });
+
+  it("partial config reports only what is actually scoped out", async () => {
+    vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", "evm,solana");
+    vi.stubEnv("VAULTPILOT_PROTOCOLS", "aave,lido");
+    const { getScopedOutFamilies, getScopedOutProtocols, getScopeEnableHint } = await import(
+      "../src/config/scope.js"
+    );
+    expect(getScopedOutFamilies()).toEqual(["btc", "ltc", "tron"]);
+    expect(getScopedOutProtocols()).not.toContain("aave");
+    expect(getScopedOutProtocols()).not.toContain("lido");
+    expect(getScopedOutProtocols()).toContain("uniswap");
+    expect(getScopeEnableHint()).toContain("VAULTPILOT_CHAIN_FAMILIES=btc,evm,ltc,solana,tron");
+  });
+
 });
 
 /**

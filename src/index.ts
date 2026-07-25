@@ -561,7 +561,14 @@ import type {
 import type { SendTransactionArgs } from "./modules/execution/schemas.js";
 
 import { readUserConfig } from "./config/user-config.js";
-import { isToolEnabled } from "./config/scope.js";
+import {
+  isToolEnabled,
+  getEnabledFamilies,
+  getEnabledProtocols,
+  getScopedOutFamilies,
+  getScopedOutProtocols,
+  getScopeEnableHint,
+} from "./config/scope.js";
 import { safeErrorMessage, redactResponseContent } from "./shared/error-message.js";
 
 /**
@@ -1671,6 +1678,26 @@ async function main() {
     console.error(
       "[vaultpilot-mcp] warning: no RPC provider configured. Run `vaultpilot-mcp-setup` or set RPC_PROVIDER + RPC_API_KEY."
     );
+  }
+
+  // Issue #733 — scope-friction observability, the half of the friction
+  // measure that ships WITH the curated-CORE default. A scoped-out tool is
+  // never registered, so there is no per-call refusal to surface in-band; this
+  // stderr line (mirrored by `get_vaultpilot_config_status`'s `scope` block)
+  // is what tells an operator staring at a short tool list why it is short.
+  // Silent when nothing is scoped out — a fully-opened install gets no noise.
+  {
+    const scopedOutFamilies = getScopedOutFamilies();
+    const scopedOutProtocols = getScopedOutProtocols();
+    if (scopedOutFamilies.length > 0 || scopedOutProtocols.length > 0) {
+      const enabledProtocols = getEnabledProtocols();
+      console.error(
+        `[vaultpilot-mcp] tool scope: families=[${[...getEnabledFamilies()].sort().join(",")}] ` +
+          `protocols=[${enabledProtocols === null ? "all" : [...enabledProtocols].sort().join(",")}]; ` +
+          `scoped out: families=[${scopedOutFamilies.join(",")}] ` +
+          `protocols=[${scopedOutProtocols.join(",")}]. ${getScopeEnableHint()}`,
+      );
+    }
   }
 
   const server = new McpServer(

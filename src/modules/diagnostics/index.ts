@@ -28,7 +28,13 @@ import {
   type SetupHint,
 } from "../../data/rate-limit-tracker.js";
 import { isDemoMode, getLiveWallet, isLiveMode } from "../../demo/index.js";
-import { getEnabledFamilies, getEnabledProtocols } from "../../config/scope.js";
+import {
+  getEnabledFamilies,
+  getEnabledProtocols,
+  getScopedOutFamilies,
+  getScopedOutProtocols,
+  getScopeEnableHint,
+} from "../../config/scope.js";
 import { getRuntimeSolanaRpc } from "../../data/runtime-rpc-overrides.js";
 
 type EvmRpcSource =
@@ -177,12 +183,18 @@ interface VaultPilotConfigStatus {
    * Active tool-surface scope (plan: claude-work/plan-conditional-chain-context-loading.md).
    *
    *   - `families`: which chain families' tools were registered this
-   *     session. Matches `VAULTPILOT_CHAIN_FAMILIES` env var (default = all
-   *     five). When narrower than all-five, the corresponding chains' tools
+   *     session. Matches `VAULTPILOT_CHAIN_FAMILIES` (default `["evm"]` since
+   *     #733). When narrower than all-five, the corresponding chains' tools
    *     don't appear in this MCP's surface — saving the per-turn token cost
    *     of carrying their description + JSON schema.
-   *   - `protocols`: when set, narrows the EVM/Solana protocol-specific
-   *     tools further. `null` = all protocols enabled (default).
+   *   - `protocols`: which protocol-specific tools were registered. Default
+   *     `[]` (none) since #733; `null` = explicit `VAULTPILOT_PROTOCOLS=all`.
+   *   - `scopedOutFamilies` / `scopedOutProtocols` / `enableHint`: #733's
+   *     friction measure — what EXISTS but isn't registered, plus the
+   *     one-line recipe to widen it. Scoped-out tools are never registered,
+   *     so no per-call refusal exists to count; this block plus the startup
+   *     log line IS the visible friction, with `request_capability` as the
+   *     demand signal.
    *
    * Surface as informational — agents don't need to act on it, but the
    * user does, when troubleshooting "why don't I see prepare_compound_*?".
@@ -190,6 +202,9 @@ interface VaultPilotConfigStatus {
   scope: {
     families: string[];
     protocols: string[] | null;
+    scopedOutFamilies: string[];
+    scopedOutProtocols: string[];
+    enableHint: string;
   };
 }
 
@@ -353,6 +368,9 @@ export function getVaultPilotConfigStatus(_args: Record<string, never> = {}): Va
     scope: {
       families: [...getEnabledFamilies()].sort(),
       protocols: enabledProtocols ? [...enabledProtocols].sort() : null,
+      scopedOutFamilies: getScopedOutFamilies(),
+      scopedOutProtocols: getScopedOutProtocols(),
+      enableHint: getScopeEnableHint(),
     },
   };
 }

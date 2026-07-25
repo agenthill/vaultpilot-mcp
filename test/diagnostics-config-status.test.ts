@@ -8,7 +8,7 @@
  * known secret-shaped values that were planted in env/config — none of
  * them should appear anywhere in the structured response.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdirSync,
   mkdtempSync,
@@ -454,5 +454,51 @@ describe("get_vaultpilot_config_status — basic shape", () => {
     const { getVaultPilotConfigStatus } = await loadFresh();
     const status = getVaultPilotConfigStatus();
     expect(status.configFileExists).toBe(true);
+  });
+});
+
+/**
+ * Issue #733 — scope-friction observability. Scoped-out tools are never
+ * registered, so no per-call refusal exists to report; this block is the
+ * in-band friction signal: what is on, what is scoped out, how to widen it.
+ *
+ * `vi.resetModules()` before the import is load-bearing — `src/config/scope.ts`
+ * reads its env vars once at module eval, and the query-string `loadFresh()`
+ * used elsewhere in this file re-instantiates only the diagnostics module.
+ */
+describe("get_vaultpilot_config_status — tool scope block (#733)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function loadWithScope(families: string, protocols: string) {
+    vi.resetModules();
+    vi.stubEnv("VAULTPILOT_CHAIN_FAMILIES", families);
+    vi.stubEnv("VAULTPILOT_PROTOCOLS", protocols);
+    return await import("../src/modules/diagnostics/index.js");
+  }
+
+  it("reports the curated-CORE default + a one-line enable hint", async () => {
+    const { getVaultPilotConfigStatus } = await loadWithScope("", "");
+    const status = getVaultPilotConfigStatus();
+    expect(status.scope.families).toEqual(["evm"]);
+    expect(status.scope.protocols).toEqual([]);
+    expect(status.scope.scopedOutFamilies).toEqual(["btc", "ltc", "solana", "tron"]);
+    expect(status.scope.scopedOutProtocols.length).toBe(13);
+    expect(status.scope.scopedOutProtocols).toContain("marginfi");
+    expect(status.scope.enableHint).toContain("VAULTPILOT_CHAIN_FAMILIES=");
+    expect(status.scope.enableHint).toContain("VAULTPILOT_PROTOCOLS=");
+    expect(status.scope.enableHint).toContain("restart the client");
+    expect(status.scope.enableHint).not.toContain("\n");
+  });
+
+  it("reports nothing scoped out under the explicit all/all config", async () => {
+    const { getVaultPilotConfigStatus } = await loadWithScope("all", "all");
+    const status = getVaultPilotConfigStatus();
+    expect(status.scope.protocols).toBeNull(); // accept-all sentinel passthrough
+    expect(status.scope.scopedOutFamilies).toEqual([]);
+    expect(status.scope.scopedOutProtocols).toEqual([]);
+    expect(status.scope.enableHint).toContain("Nothing is scoped out");
   });
 });

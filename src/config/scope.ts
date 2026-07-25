@@ -3,8 +3,15 @@
  *
  * Two env-var axes, intersected — a tool is registered iff BOTH accept it:
  *
- *   VAULTPILOT_CHAIN_FAMILIES=evm,solana       (default: all five families)
- *   VAULTPILOT_PROTOCOLS=aave,lido,uniswap     (default: all protocols)
+ *   VAULTPILOT_CHAIN_FAMILIES=evm,solana       (default: evm only)
+ *   VAULTPILOT_PROTOCOLS=aave,lido,uniswap     (default: none)
+ *
+ * Curated-CORE default (issue #733, ARCHITECTURE.md §6 R7): an unconfigured
+ * install registers the EVM family plus the chain-agnostic core bucket only —
+ * Solana / TRON / BTC / LTC and all thirteen DeFi protocols are opt-in, since
+ * the host pays every registered tool's description + schema text every turn.
+ * Both env vars accept the literal token `all`, which restores the pre-#733
+ * accept-everything behavior for that axis.
  *
  * Family aliases accepted (so users typing the chain name they recognize
  * still work): `ethereum|arbitrum|polygon|base|optimism` → `evm`,
@@ -52,6 +59,42 @@ export type Protocol =
 
 const ALL_FAMILIES: readonly ChainFamily[] = ["evm", "solana", "tron", "btc", "ltc"];
 
+/**
+ * Curated-CORE default (#733) — unset means EVM only, NOT every family. Kept
+ * separate from `ALL_FAMILIES` so "what a fresh install gets" and "what
+ * exists" can't drift into each other by a one-token edit.
+ */
+const DEFAULT_FAMILIES: readonly ChainFamily[] = ["evm"];
+
+/**
+ * Every known protocol. Drives the scoped-out enumeration in the config-status
+ * report and the startup log line — a protocol added to the `Protocol` union
+ * but not here vanishes silently from that report.
+ */
+const ALL_PROTOCOLS: readonly Protocol[] = [
+  "aave",
+  "compound",
+  "morpho",
+  "lido",
+  "eigenlayer",
+  "uniswap",
+  "curve",
+  "safe",
+  "rocketpool",
+  "marginfi",
+  "kamino",
+  "marinade",
+  "jito",
+];
+
+/**
+ * Escape hatch accepted by both env vars, restoring the pre-#733 accept-
+ * everything behavior for that axis. Before #733 `all` "worked" only by
+ * accident (it parsed as a typo and hit the all-families fallback); it is a
+ * first-class token now that the default is narrow.
+ */
+const ALL_TOKEN = "all";
+
 const FAMILY_ALIASES: Record<string, ChainFamily> = {
   evm: "evm",
   ethereum: "evm",
@@ -70,25 +113,38 @@ const FAMILY_ALIASES: Record<string, ChainFamily> = {
 };
 
 function parseFamilies(raw: string | undefined): Set<ChainFamily> {
-  if (!raw) return new Set(ALL_FAMILIES);
+  // Unset → curated-CORE default (#733): EVM only.
+  if (!raw) return new Set(DEFAULT_FAMILIES);
   const out = new Set<ChainFamily>();
   for (const tok of raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)) {
+    if (tok === ALL_TOKEN) {
+      for (const fam of ALL_FAMILIES) out.add(fam);
+      continue;
+    }
     const fam = FAMILY_ALIASES[tok];
     if (fam) out.add(fam);
   }
-  // Empty parse (all tokens were typos) → fall back to all families. The
-  // alternative — booting with zero tools — is a worse UX than ignoring a
-  // misconfigured env var.
+  // Empty parse (all tokens were typos) → fall back to all families.
+  // Deliberately UNCHANGED by #733: booting a user who tried to configure
+  // something with zero chain tools is worse UX than ignoring a misconfigured
+  // env var. Unset is "user said nothing"; a typo is "user said something we
+  // couldn't read" — different inputs, deliberately different fallbacks.
   if (out.size === 0) return new Set(ALL_FAMILIES);
   return out;
 }
 
+/**
+ * `null` = accept every protocol, and after #733 it is reachable ONLY via an
+ * explicit `VAULTPILOT_PROTOCOLS=all`. Unset now yields the empty set: no
+ * protocol-tagged tool registers until the user names one.
+ */
 function parseProtocols(raw: string | undefined): Set<string> | null {
-  if (!raw) return null;
+  // Unset → curated-CORE default (#733): no protocols.
+  if (!raw) return new Set<string>();
   const set = new Set(
     raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   );
-  if (set.size === 0) return null;
+  if (set.has(ALL_TOKEN)) return null;
   return set;
 }
 
@@ -108,7 +164,58 @@ export function isFamilyEnabled(family: ChainFamily): boolean {
 }
 
 export function isProtocolEnabled(protocol: string): boolean {
+  // `null` is the explicit `VAULTPILOT_PROTOCOLS=all` accept-everything
+  // sentinel — never the default (#733).
   return ENABLED_PROTOCOLS === null || ENABLED_PROTOCOLS.has(protocol);
+}
+
+/**
+ * Chain families that exist but are NOT registered under the active config.
+ * Sorted for a stable report/log line.
+ */
+export function getScopedOutFamilies(): ChainFamily[] {
+  return ALL_FAMILIES.filter((fam) => !ENABLED_FAMILIES.has(fam)).sort();
+}
+
+/**
+ * Protocols that exist but are NOT registered under the active config. Sorted
+ * for a stable report/log line; empty under `VAULTPILOT_PROTOCOLS=all`. A
+ * protocol whose FAMILY is also scoped out is listed too — it is scoped out
+ * either way, and hiding it understates what the user is missing.
+ */
+export function getScopedOutProtocols(): Protocol[] {
+  if (ENABLED_PROTOCOLS === null) return [];
+  return ALL_PROTOCOLS.filter((p) => !ENABLED_PROTOCOLS.has(p)).sort();
+}
+
+/**
+ * One-line, verbatim-relayable recipe for turning scoped-out capabilities back
+ * on — half of #733's friction measure (scoped-out tools are un-registered, so
+ * no in-band per-call refusal exists to count; `request_capability` stays the
+ * demand signal). Suggested values are the union of what's on and what's
+ * scoped out — paste-to-enable-everything; the text says narrower works too.
+ */
+export function getScopeEnableHint(): string {
+  const families = getScopedOutFamilies();
+  const protocols = getScopedOutProtocols();
+  if (families.length === 0 && protocols.length === 0) {
+    return "Nothing is scoped out — every chain family and protocol tool is registered.";
+  }
+  const parts: string[] = [];
+  if (families.length > 0) {
+    const union = [...new Set([...ENABLED_FAMILIES, ...families])].sort();
+    parts.push(`VAULTPILOT_CHAIN_FAMILIES=${union.join(",")}`);
+  }
+  if (protocols.length > 0) {
+    const enabled: string[] = ENABLED_PROTOCOLS === null ? [] : [...ENABLED_PROTOCOLS];
+    const union = [...new Set([...enabled, ...protocols])].sort();
+    parts.push(`VAULTPILOT_PROTOCOLS=${union.join(",")}`);
+  }
+  return (
+    `Scoped-out tools are opt-in: set ${parts.join(" and/or ")} in your ` +
+    "MCP-client config and restart the client. Comma-separated; a narrower " +
+    "list works (name only what you use), and `all` accepts every value."
+  );
 }
 
 /**
