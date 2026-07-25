@@ -428,6 +428,25 @@ const ALWAYS_GATED_EXPLICIT = new Set([
   // prefix; listing the one signing prepare_ tool keeps every other prepare_*
   // on its inspection-only conditional path.
   "prepare_btc_multisig_send",
+  // submit_safe_tx_signature POSTs to the real Safe Transaction Service —
+  // `kit.proposeTransaction` / `kit.confirmTransaction` (safe/actions.ts) —
+  // once its on-chain `approvedHashes(signer, safeTxHash) != 0` precondition
+  // holds. That precondition is satisfiable in demo: the approval can have
+  // been mined before demo was entered, or from the Safe Web UI / a co-signer
+  // entirely outside this server, so #772's device-signing gates do NOT make
+  // this unreachable. The effect is an off-chain write — a pending multisig
+  // tx in the real Safe queue gains a signature, visible to every co-signer
+  // and one step closer to execution — while the user believes demo mode
+  // means nothing real happens.
+  //
+  // A DIFFERENT sink class from #772's device-sign/broadcast set (off-chain
+  // API write, not a signature or an on-chain broadcast), but the same
+  // always-gate shape: real-world effect with no demo-simulation equivalent
+  // (`broadcastSimulationDispatch` is bound to the send_transaction
+  // handle/simulate flow and cannot wrap an STS POST). Gating it loses no
+  // inspection-only demo UX — the tool has no read-only branch; every
+  // successful call writes. Issue #775.
+  "submit_safe_tx_signature",
 ]);
 
 /**

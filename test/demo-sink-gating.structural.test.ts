@@ -100,6 +100,24 @@ describe("issue #772 — structural sink-gating binding", () => {
     expect(isAlwaysGatedTool("prepare_btc_multisig_send")).toBe(true);
   });
 
+  it("submit_safe_tx_signature (#775 off-chain-write sink) is sink-reaching AND contained", () => {
+    // Issue #775 widened the sink set with the Safe Transaction Service POST
+    // (`kit.proposeTransaction` / `kit.confirmTransaction`) — a real network
+    // write that is neither a device signature nor an on-chain broadcast, so
+    // #772's sink set did not cover it. Assert both halves: that the widened
+    // analysis actually detects the reach (RED if the sink names are dropped
+    // from PROP_SINKS) and that the tool is always-gated (RED if the gate is
+    // reverted).
+    const submit = byName.get("submit_safe_tx_signature");
+    expect(submit, "submit_safe_tx_signature is not a registered tool").toBeDefined();
+    expect(
+      submit?.sinkReaching,
+      `submit_safe_tx_signature path: ${JSON.stringify(submit?.sinkPath)}`,
+    ).toBe(true);
+    expect(contained("submit_safe_tx_signature")).toBe(true);
+    expect(isAlwaysGatedTool("submit_safe_tx_signature")).toBe(true);
+  });
+
   it("every sink-reaching tool is contained in demo mode (the security invariant)", () => {
     const escapees = results
       .filter((r) => r.sinkReaching && !contained(r.name) && !KNOWN_UNCONTAINED_OUT_OF_SCOPE.has(r.name))
