@@ -3,8 +3,15 @@
  *
  * Two env-var axes, intersected — a tool is registered iff BOTH accept it:
  *
- *   VAULTPILOT_CHAIN_FAMILIES=evm,solana       (default: all five families)
- *   VAULTPILOT_PROTOCOLS=aave,lido,uniswap     (default: all protocols)
+ *   VAULTPILOT_CHAIN_FAMILIES=evm,solana       (default: {evm} only)
+ *   VAULTPILOT_PROTOCOLS=aave,lido,uniswap     (default: none)
+ *
+ * Curated-CORE default (#733, ARCHITECTURE.md §6 R7, PROD-adjudicated on
+ * #721): an UNCONFIGURED install registers the EVM family plus the chain-
+ * agnostic core bucket only — the other four families and all thirteen
+ * protocols are opt-in. Both axes accept the literal token `all` to restore
+ * the pre-#733 accept-everything surface (`VAULTPILOT_CHAIN_FAMILIES=all`,
+ * `VAULTPILOT_PROTOCOLS=all`).
  *
  * Family aliases accepted (so users typing the chain name they recognize
  * still work): `ethereum|arbitrum|polygon|base|optimism` → `evm`,
@@ -52,6 +59,44 @@ export type Protocol =
 
 const ALL_FAMILIES: readonly ChainFamily[] = ["evm", "solana", "tron", "btc", "ltc"];
 
+/**
+ * Every known protocol id, in the same order as the `Protocol` union above.
+ * Only used to ENUMERATE what an install has scoped out (the friction signal
+ * on #733) — gating itself stays open-set, so a `VAULTPILOT_PROTOCOLS` typo
+ * still gates nothing rather than failing boot.
+ */
+const ALL_PROTOCOLS: readonly Protocol[] = [
+  "aave",
+  "compound",
+  "morpho",
+  "lido",
+  "eigenlayer",
+  "uniswap",
+  "curve",
+  "safe",
+  "rocketpool",
+  "marginfi",
+  "kamino",
+  "marinade",
+  "jito",
+];
+
+/**
+ * Curated-CORE default (#733). An unconfigured install gets `{evm}` + the
+ * chain-agnostic core bucket — ≤72 registered tools instead of all 189.
+ */
+const DEFAULT_FAMILIES: readonly ChainFamily[] = ["evm"];
+
+/** Literal env-var token that restores the pre-#733 accept-everything axis. */
+const ALL_TOKEN = "all";
+
+/** One-line remediation string — the enable hint every friction surface shows. */
+export const SCOPE_ENABLE_HINT =
+  "Enable more by setting VAULTPILOT_CHAIN_FAMILIES (e.g. `evm,solana` or `all`) " +
+  "and/or VAULTPILOT_PROTOCOLS (e.g. `aave,lido,uniswap` or `all`) in your MCP " +
+  "client's env block, then restart the client — the tool surface is fixed at " +
+  "server start, so a restart is required for the change to take effect.";
+
 const FAMILY_ALIASES: Record<string, ChainFamily> = {
   evm: "evm",
   ethereum: "evm",
@@ -70,9 +115,15 @@ const FAMILY_ALIASES: Record<string, ChainFamily> = {
 };
 
 function parseFamilies(raw: string | undefined): Set<ChainFamily> {
-  if (!raw) return new Set(ALL_FAMILIES);
+  // UNSET → curated-CORE default (#733). An EXPLICIT value keeps its
+  // pre-#733 meaning, `all` included.
+  if (!raw) return new Set(DEFAULT_FAMILIES);
+  const toks = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  // `all` is the documented opt-back-in escape hatch. Handled explicitly
+  // rather than left to the typo fallback below so it stays load-bearing.
+  if (toks.includes(ALL_TOKEN)) return new Set(ALL_FAMILIES);
   const out = new Set<ChainFamily>();
-  for (const tok of raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)) {
+  for (const tok of toks) {
     const fam = FAMILY_ALIASES[tok];
     if (fam) out.add(fam);
   }
@@ -83,13 +134,18 @@ function parseFamilies(raw: string | undefined): Set<ChainFamily> {
   return out;
 }
 
+/**
+ * `null` = accept every protocol (only reachable via an explicit `all`).
+ * An empty set = accept none, which is the #733 default when the env var is
+ * unset. A set-but-content-free value (`" "`, `","`) also parses to the empty
+ * set: under a deny-by-default axis, "the user wrote something empty" reads as
+ * "none", not as "everything".
+ */
 function parseProtocols(raw: string | undefined): Set<string> | null {
-  if (!raw) return null;
-  const set = new Set(
-    raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
-  );
-  if (set.size === 0) return null;
-  return set;
+  if (!raw) return new Set<string>();
+  const toks = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (toks.includes(ALL_TOKEN)) return null;
+  return new Set(toks);
 }
 
 const ENABLED_FAMILIES: Set<ChainFamily> = parseFamilies(process.env.VAULTPILOT_CHAIN_FAMILIES);
@@ -109,6 +165,46 @@ export function isFamilyEnabled(family: ChainFamily): boolean {
 
 export function isProtocolEnabled(protocol: string): boolean {
   return ENABLED_PROTOCOLS === null || ENABLED_PROTOCOLS.has(protocol);
+}
+
+/**
+ * Friction signal (#733). A clean scope flip UN-registers scoped-out tools,
+ * so the host never sees them and there is no in-band per-call refusal to
+ * count. These enumerations are the substitute: they tell the user exactly
+ * what this install is NOT carrying, so "why don't I see prepare_btc_send?"
+ * is answerable from `get_vaultpilot_config_status` and from one startup log
+ * line instead of from the source.
+ */
+export function getScopedOutFamilies(): ChainFamily[] {
+  return ALL_FAMILIES.filter((f) => !ENABLED_FAMILIES.has(f));
+}
+
+/**
+ * Known protocols this install gates out. Empty when the axis is accept-all
+ * (`VAULTPILOT_PROTOCOLS=all`). Only the KNOWN protocol ids are enumerable —
+ * the gating set itself stays open, so an unknown id in the env var neither
+ * appears here nor enables anything.
+ */
+export function getScopedOutProtocols(): Protocol[] {
+  if (ENABLED_PROTOCOLS === null) return [];
+  const enabled = ENABLED_PROTOCOLS;
+  return ALL_PROTOCOLS.filter((p) => !enabled.has(p));
+}
+
+/**
+ * One-line human-readable summary of what the active scope excludes, or
+ * `null` when nothing is excluded (nothing worth logging). Used for the
+ * startup stderr line; `get_vaultpilot_config_status` reports the same facts
+ * structurally.
+ */
+export function describeScopeFriction(): string | null {
+  const families = getScopedOutFamilies();
+  const protocols = getScopedOutProtocols();
+  if (families.length === 0 && protocols.length === 0) return null;
+  const parts: string[] = [];
+  if (families.length > 0) parts.push(`chain families off: ${families.join(", ")}`);
+  if (protocols.length > 0) parts.push(`protocols off: ${protocols.join(", ")}`);
+  return `tool scope — ${parts.join("; ")}. ${SCOPE_ENABLE_HINT}`;
 }
 
 /**

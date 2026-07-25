@@ -28,7 +28,13 @@ import {
   type SetupHint,
 } from "../../data/rate-limit-tracker.js";
 import { isDemoMode, getLiveWallet, isLiveMode } from "../../demo/index.js";
-import { getEnabledFamilies, getEnabledProtocols } from "../../config/scope.js";
+import {
+  getEnabledFamilies,
+  getEnabledProtocols,
+  getScopedOutFamilies,
+  getScopedOutProtocols,
+  SCOPE_ENABLE_HINT,
+} from "../../config/scope.js";
 import { getRuntimeSolanaRpc } from "../../data/runtime-rpc-overrides.js";
 
 type EvmRpcSource =
@@ -177,12 +183,20 @@ interface VaultPilotConfigStatus {
    * Active tool-surface scope (plan: claude-work/plan-conditional-chain-context-loading.md).
    *
    *   - `families`: which chain families' tools were registered this
-   *     session. Matches `VAULTPILOT_CHAIN_FAMILIES` env var (default = all
-   *     five). When narrower than all-five, the corresponding chains' tools
-   *     don't appear in this MCP's surface — saving the per-turn token cost
-   *     of carrying their description + JSON schema.
-   *   - `protocols`: when set, narrows the EVM/Solana protocol-specific
-   *     tools further. `null` = all protocols enabled (default).
+   *     session. Matches `VAULTPILOT_CHAIN_FAMILIES` env var (default =
+   *     `{evm}` since #733). When narrower than all-five, the corresponding
+   *     chains' tools don't appear in this MCP's surface — saving the
+   *     per-turn token cost of carrying their description + JSON schema.
+   *   - `protocols`: which protocol-specific tools were registered. Matches
+   *     `VAULTPILOT_PROTOCOLS` (default = `[]` since #733). `null` = the
+   *     explicit accept-all escape hatch (`VAULTPILOT_PROTOCOLS=all`).
+   *   - `scopedOutFamilies` / `scopedOutProtocols`: the complements — what
+   *     this install is NOT carrying. This is the #733 friction signal: the
+   *     flip un-registers scoped-out tools, so the host never sees them and
+   *     there is no per-call refusal to report; these two lists plus
+   *     `enableHint` are what turns "that tool doesn't exist" into "that
+   *     tool is one env var away".
+   *   - `enableHint`: verbatim-relayable remediation line.
    *
    * Surface as informational — agents don't need to act on it, but the
    * user does, when troubleshooting "why don't I see prepare_compound_*?".
@@ -190,6 +204,9 @@ interface VaultPilotConfigStatus {
   scope: {
     families: string[];
     protocols: string[] | null;
+    scopedOutFamilies: string[];
+    scopedOutProtocols: string[];
+    enableHint: string;
   };
 }
 
@@ -353,6 +370,9 @@ export function getVaultPilotConfigStatus(_args: Record<string, never> = {}): Va
     scope: {
       families: [...getEnabledFamilies()].sort(),
       protocols: enabledProtocols ? [...enabledProtocols].sort() : null,
+      scopedOutFamilies: getScopedOutFamilies().sort(),
+      scopedOutProtocols: getScopedOutProtocols().sort(),
+      enableHint: SCOPE_ENABLE_HINT,
     },
   };
 }

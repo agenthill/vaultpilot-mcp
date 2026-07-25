@@ -561,7 +561,7 @@ import type {
 import type { SendTransactionArgs } from "./modules/execution/schemas.js";
 
 import { readUserConfig } from "./config/user-config.js";
-import { isToolEnabled } from "./config/scope.js";
+import { isToolEnabled, describeScopeFriction } from "./config/scope.js";
 import { safeErrorMessage, redactResponseContent } from "./shared/error-message.js";
 
 /**
@@ -4322,8 +4322,10 @@ async function main() {
         "throttled past threshold and tell the user which provider to sign up for + the wizard " +
         "subcommand; `demo-mode` nudges fire on a fresh-install state — no keys, no pairings, " +
         "no custom RPC — suggesting `VAULTPILOT_DEMO=true` as the zero-friction first-time path " +
-        "per issue #371), AND a `demoMode` field that surfaces whether `VAULTPILOT_DEMO=true` " +
-        "is active plus the activation recipe. Pure local I/O — reads " +
+        "per issue #371), a `demoMode` field that surfaces whether `VAULTPILOT_DEMO=true` " +
+        "is active plus the activation recipe, AND a `scope` field carrying the active tool " +
+        "scope (`families`, `protocols`) together with its complements `scopedOutFamilies` / " +
+        "`scopedOutProtocols` and a verbatim-relayable `enableHint`. Pure local I/O — reads " +
         "~/.vaultpilot-mcp/config.json + process.env, no RPC calls, no network. Use this when " +
         "the user asks 'is my config set up correctly' or 'why is my Solana balance read " +
         "failing' before suggesting they re-run setup or paste keys. AGENT BEHAVIOR for " +
@@ -4339,7 +4341,13 @@ async function main() {
         "`liveMode.active` is true, signing-class tools have been re-enabled in simulation-only " +
         "mode (broadcast intercepted with a structured envelope). When the user wants the " +
         "write-flow walkthrough, call `get_demo_wallet` to surface the persona list, then " +
-        "`set_demo_wallet({ persona: \"...\" })` to upgrade.",
+        "`set_demo_wallet({ persona: \"...\" })` to upgrade. " +
+        "AGENT BEHAVIOR for scope: an unconfigured install registers the EVM family plus the " +
+        "chain-agnostic core tools ONLY (issue #733) — the other chain families and every " +
+        "DeFi protocol are opt-in. When the user asks why a Solana / TRON / Bitcoin / Litecoin " +
+        "or protocol-specific tool is missing, do NOT report it as unsupported: read " +
+        "`scope.scopedOutFamilies` / `scope.scopedOutProtocols` and relay `scope.enableHint` " +
+        "verbatim.",
       inputSchema: getVaultPilotConfigStatusInput.shape,
       annotations: {
         title: "Get Vaultpilot Config Status",
@@ -6379,6 +6387,17 @@ async function main() {
       );
     }
   });
+
+  // Issue #733 — scope-friction observability. The curated-CORE default
+  // UN-registers scoped-out tools, so the host never sees them and there is
+  // no in-band per-call refusal an operator could count. This stderr line is
+  // the out-of-band substitute: one enumeration of what this install is NOT
+  // carrying, plus the enable hint. Silent when nothing is scoped out.
+  const scopeFriction = describeScopeFriction();
+  if (scopeFriction) {
+    // eslint-disable-next-line no-console
+    console.warn(`[vaultpilot-mcp] ${scopeFriction}`);
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
