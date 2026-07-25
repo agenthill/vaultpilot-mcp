@@ -54,8 +54,8 @@
 
 import { etherscanV2Fetch } from "../../data/apis/etherscan-v2.js";
 import { getClient } from "../../data/rpc.js";
-import { CONTRACTS } from "../../config/contracts.js";
 import { formatUnits } from "../../data/format.js";
+import { lookupKnownSpender } from "../../security/known-spenders.js";
 import type { SupportedChain } from "../../types/index.js";
 
 /**
@@ -184,41 +184,6 @@ async function fetchPermit2Logs(
   };
   const logs = await etherscanV2Fetch<EtherscanLogRow>(chain, params);
   return { logs, truncated: logs.length >= LOGS_PAGE_SIZE };
-}
-
-/**
- * Resolve a friendly label for a downstream spender from the
- * `CONTRACTS` table on the given chain. Mirrors the primary tool's
- * label resolution so the read surfaces consistent names across both
- * direct and via-Permit2 rows.
- */
-function lookupKnownSpender(
-  chain: SupportedChain,
-  spender: `0x${string}`,
-): string | undefined {
-  const c = CONTRACTS[chain] as Record<string, Record<string, string>> | undefined;
-  if (!c) return undefined;
-  const target = spender.toLowerCase();
-  for (const [protocol, addrs] of Object.entries(c)) {
-    if (protocol === "tokens") continue;
-    if (typeof addrs !== "object" || addrs === null) continue;
-    for (const [name, addr] of Object.entries(addrs)) {
-      if (typeof addr !== "string" || addr.toLowerCase() !== target) continue;
-      let protoLabel: string;
-      switch (protocol) {
-        case "aave": protoLabel = "Aave V3"; break;
-        case "uniswap": protoLabel = "Uniswap V3"; break;
-        case "lido": protoLabel = "Lido"; break;
-        case "eigenlayer": protoLabel = "EigenLayer"; break;
-        case "compound": protoLabel = "Compound V3"; break;
-        case "morpho": protoLabel = "Morpho Blue"; break;
-        default: protoLabel = protocol.charAt(0).toUpperCase() + protocol.slice(1);
-      }
-      const niceName = name.charAt(0).toUpperCase() + name.slice(1);
-      return `${protoLabel} ${niceName}`;
-    }
-  }
-  return undefined;
 }
 
 export interface FetchPermit2SubAllowancesResult {
