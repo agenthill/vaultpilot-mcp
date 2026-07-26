@@ -7,6 +7,7 @@ import { getClient } from "../../data/rpc.js";
 import { getTokenPrice } from "../../data/prices.js";
 import { assertSlippageOk } from "../swap/index.js";
 import { mevExposureNote } from "../swap/mev-hint.js";
+import { applyMinOut, applyMaxIn } from "../shared/slippage.js";
 import type { PrepareUniswapSwapArgs } from "./schemas.js";
 import type { SupportedChain, UnsignedTx } from "../../types/index.js";
 
@@ -133,15 +134,6 @@ async function pickBestFeeTier(
   return { fee: best.fee, quotedAmount: best.amount };
 }
 
-function applySlippageExactIn(quotedOut: bigint, slippageBps: number): bigint {
-  return (quotedOut * BigInt(10_000 - slippageBps)) / 10_000n;
-}
-
-function applySlippageExactOut(quotedIn: bigint, slippageBps: number): bigint {
-  // Round up so we approve/spend enough to cover the worst-case in-amount.
-  return (quotedIn * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n;
-}
-
 export async function prepareUniswapSwap(
   args: PrepareUniswapSwapArgs
 ): Promise<UnsignedTx> {
@@ -193,9 +185,9 @@ export async function prepareUniswapSwap(
   const slippageBps = args.slippageBps ?? 50;
   const amountOutMin = isExactOut
     ? amountWei
-    : applySlippageExactIn(quotedAmount, slippageBps);
+    : applyMinOut(quotedAmount, slippageBps);
   const amountInMax = isExactOut
-    ? applySlippageExactOut(quotedAmount, slippageBps)
+    ? applyMaxIn(quotedAmount, slippageBps)
     : amountWei;
 
   const wallet = getAddress(args.wallet);

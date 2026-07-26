@@ -23,6 +23,7 @@ import {
 } from "./vet-lifi-quote.js";
 import { mevExposureNote } from "./mev-hint.js";
 import { buildApprovalTx, chainApproval, resolveApprovalCap } from "../shared/approval.js";
+import { applyMinOut, applyMaxIn } from "../shared/slippage.js";
 import type { SupportedChain, UnsignedTx } from "../../types/index.js";
 
 /**
@@ -846,7 +847,7 @@ async function prepareDirectOneInchSwap(
   const fromSym = oi.srcToken.symbol;
   const toSym = oi.dstToken.symbol;
   const dstAmount = BigInt(oi.dstAmount);
-  const minOut = (dstAmount * BigInt(10000 - slippageBps)) / 10000n;
+  const minOut = applyMinOut(dstAmount, slippageBps);
   const quotedToAmount = formatUnits(dstAmount, oi.dstToken.decimals);
   const minOutFormatted = formatUnits(minOut, oi.dstToken.decimals);
 
@@ -1292,7 +1293,7 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
     const slippageBpsEffective = args.slippageBps ?? 50; // LiFi default is 0.5% (50 bps)
     const quotedFromWei = BigInt(quote.action.fromAmount);
     const amountWeiBig = isExactOut
-      ? (quotedFromWei * BigInt(10_000 + slippageBpsEffective) + 9_999n) / 10_000n
+      ? applyMaxIn(quotedFromWei, slippageBpsEffective)
       : quotedFromWei;
     const approvalDisplay = isExactOut
       ? `≤${formatUnits(amountWeiBig, quote.action.fromToken.decimals)}`
