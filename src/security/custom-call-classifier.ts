@@ -125,18 +125,20 @@ export function matchSendFamilyGate(
 
 /**
  * Throw a NON-bypassable refusal when a send-family selector's recipient is
- * not the wallet. `recipientIsWallet` is computed by the caller from the
- * decoded recipient arg (deny-by-default when the arg is missing). Mirrors
- * the #727 `transferFrom` recipient block: the `acknowledgeKnownExfilPattern`
- * escape hatch cannot launder a non-wallet recipient. No-op for selectors
- * outside the gate set. Runs BEFORE `applyCustomCallClassifier`, which it
- * leaves untouched — strictly-additive defense-in-depth.
+ * not the wallet. `entry` is the already-matched gate entry (or null) — the
+ * caller runs `matchSendFamilyGate(data)` once and passes the result in here
+ * rather than this function re-matching the same calldata a second time.
+ * `recipientIsWallet` is computed by the caller from the decoded recipient
+ * arg (deny-by-default when the arg is missing). Mirrors the #727
+ * `transferFrom` recipient block: the `acknowledgeKnownExfilPattern` escape
+ * hatch cannot launder a non-wallet recipient. No-op when `entry` is null.
+ * Runs BEFORE `applyCustomCallClassifier`, which it leaves untouched —
+ * strictly-additive defense-in-depth.
  */
 export function assertSendFamilyRecipientIsWallet(
-  data: `0x${string}`,
+  entry: SendFamilyGateEntry | null,
   recipientIsWallet: boolean,
 ): void {
-  const entry = matchSendFamilyGate(data);
   if (!entry) return;
   if (recipientIsWallet) return;
   throw new Error(
@@ -303,9 +305,12 @@ export function applyCustomCallClassifier(
       throw new Error(
         `CUSTOM_CALL_REFUSED [${rule.signature}]: pulling your own wallet via ` +
           `transferFrom is value-exfil through a pre-existing approval and is NOT ` +
-          `bypassable through this escape hatch. If you intend to move tokens from ` +
-          `your own wallet, use prepare_token_send (no allowance required). If you're ` +
-          `revoking an approval, use prepare_revoke_approval.`,
+          `bypassable through this escape hatch. This selector's signature ` +
+          `(address,address,uint256) is identical for ERC-20 and ERC-721 transferFrom, ` +
+          `so it cannot tell which one this is. If this is an ERC-20 token, use ` +
+          `prepare_token_send (no allowance required) or prepare_revoke_approval to ` +
+          `revoke the approval instead. If this is an NFT, no dedicated send tool ` +
+          `exists yet — revoke the operator/approval via prepare_revoke_approval.`,
       );
     }
     if (isTransferFrom && !transferFromRecipientIsWallet) {
@@ -315,7 +320,11 @@ export function applyCustomCallClassifier(
           `value-exfil and is NOT bypassable through this escape hatch. The ` +
           `\`acknowledgeKnownExfilPattern\` override applies only to the legitimate case ` +
           `it describes: pulling a pre-existing allowance TO YOUR OWN WALLET (to == your ` +
-          `wallet). If you intended to send tokens to someone else, use prepare_token_send.`,
+          `wallet). This selector's signature (address,address,uint256) is identical for ` +
+          `ERC-20 and ERC-721 transferFrom, so it cannot tell which one this is. If this ` +
+          `is an ERC-20 token and you intended to send it to someone else, use ` +
+          `prepare_token_send; no dedicated send tool exists yet for sending an NFT to a ` +
+          `third party.`,
       );
     }
     if (ack !== true) {
