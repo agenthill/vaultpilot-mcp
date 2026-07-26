@@ -16,6 +16,12 @@
  * real code. It is an unverified matcher a future EVM-only broadcast tool
  * would silently depend on.
  *
+ * Issue #775 later added `.proposeTransaction` / `.confirmTransaction` (the
+ * Safe Transaction Service POST) to the sink set. `.confirmTransaction` has
+ * the same short-circuit problem — its only real call site sits after
+ * `.proposeTransaction` in the same function — so it gets the same synthetic
+ * treatment in `sink-reachability.sts-matcher.test.ts`.
+ *
  * This test drives `bodyHasSink` directly against a SYNTHETIC parsed AST —
  * independent of `src/index.ts`, `registerTool` extraction, or which tool
  * resolves to which sink first — so the branch gets its own positive

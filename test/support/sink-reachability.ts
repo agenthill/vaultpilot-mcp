@@ -25,6 +25,10 @@
  *   - `.signTransaction(`           (Ledger Solana / TRON signature)
  *   - a call carrying `method: "eth_sendTransaction"`  (WalletConnect EVM
  *     broadcast — the precise request site, not the pairing method allowlist)
+ *   - `.proposeTransaction(` / `.confirmTransaction(`  (Safe Transaction
+ *     Service POST — issue #775's off-chain-state-write class, added so the
+ *     mechanical binding covers real network writes that are neither a device
+ *     signature nor an on-chain broadcast)
  *
  * BOUNDS (documented limitations — this is a strong bounded approximation,
  * not a whole-program type-checker):
@@ -57,7 +61,24 @@ const SRC_ROOT = path.join(REPO_ROOT, "src");
 const INDEX_TS = path.join(SRC_ROOT, "index.ts");
 
 /** Property-access sink method names (`x.<name>(...)`). */
-const PROP_SINKS = new Set(["broadcastTx", "signPsbt", "signPsbtBuffer", "signTransaction"]);
+const PROP_SINKS = new Set([
+  "broadcastTx",
+  "signPsbt",
+  "signPsbtBuffer",
+  "signTransaction",
+  // Issue #775 — off-chain-state-write class. `kit.proposeTransaction(…)` /
+  // `kit.confirmTransaction(…)` are Safe Transaction Service POSTs: not a
+  // device signature and not an on-chain broadcast, but a real network write
+  // that mutates state outside this process (a pending Safe multisig tx gains
+  // a signature). Their only call sites in `src/` are inside
+  // `submitSafeTxSignature`, so this addition widens the analysis by exactly
+  // the tool #775 is about. Positive liveness for BOTH names (the DFS
+  // short-circuits on the first sink found, so `confirmTransaction` would
+  // otherwise never fire against real code) lives in
+  // `test/support/sink-reachability.sts-matcher.test.ts`.
+  "proposeTransaction",
+  "confirmTransaction",
+]);
 /** Bare-identifier sink function names (`<name>(...)`). */
 const IDENT_SINKS = new Set(["broadcastSolanaTx", "broadcastTronTx"]);
 /** WalletConnect broadcast request literal. */
