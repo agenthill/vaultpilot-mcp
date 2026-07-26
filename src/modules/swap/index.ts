@@ -999,11 +999,11 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
   const sourceTokenAddr = quote.action.fromToken.address as string;
   const swapClass = classifyLifiQuote(firstData as `0x${string}`);
   if (swapClass === "bridge") {
-    // Status-quo bridge flow, now instrumented (read-only, never REFUSEs).
-    instrumentBridgeQuote(quote as unknown as LifiQuoteLike, sourceTokenAddr, {
-      fromChain: args.fromChain,
-      toChain: args.toChain,
-    });
+    // Status-quo bridge flow. Instrumentation is deferred to AFTER
+    // verifyLifiBridgeIntent below (design §4.2 step 6) so a route that
+    // guard REFUSEs is never counted toward lifiBridgeSuspectedUnreachableCount
+    // — that counter feeds PROD condition 2's promotion of #745, and counting
+    // an already-refused quote would inflate it. See #752.
   } else if (swapClass === "generic") {
     const v1 = vetGenericSwapQuote(quote as unknown as LifiQuoteLike, sourceTokenAddr);
     if (v1.kind === "REFUSE") {
@@ -1070,6 +1070,16 @@ export async function prepareSwap(args: PrepareSwapArgs): Promise<UnsignedTx> {
   // Intra-EVM swap facets don't carry BridgeData and the helper returns null
   // there — no false positives on the existing same-chain swap path.
   verifyLifiBridgeIntent(args, txRequest.data as `0x${string}`);
+
+  if (swapClass === "bridge") {
+    // Bridge-class instrumentation (read-only, never REFUSEs), now placed
+    // AFTER verifyLifiBridgeIntent so a route that guard REFUSEs never
+    // reaches here — see #752.
+    instrumentBridgeQuote(quote as unknown as LifiQuoteLike, sourceTokenAddr, {
+      fromChain: args.fromChain,
+      toChain: args.toChain,
+    });
+  }
 
   // Cross-check LiFi's reported token decimals against on-chain reads. A mismatch
   // would mean either LiFi has stale metadata or the route targets a token different
