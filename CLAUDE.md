@@ -71,3 +71,6 @@
   - Always set `annotations.title` for a human-readable label distinct from the snake_case name.
 - **Don't replace the `registerTool` wrapper with fastmcp's `server.addTool` builder.** The wrapper carries demo-mode dispatch (whale-persona auto-select for `prepare_*`, broadcast-tool simulation envelope, always-/conditionally-gated refusal branches) and conditional scope-loading via `isToolEnabled` — fastmcp's API has no slot for either.
 - **Defer until a real "feels stuck" report justifies it:** progress notifications (`_meta.progressToken` + `notifications/progress` via the handler `extra` arg) for fanout tools, and `UserError`-style typed user-vs-programmer error split.
+
+## Security Findings
+- Security findings are tracked in this repo's own taxonomy under `security_finding` — file findings there, never in a parallel taxonomy. (carried from role file 2026-08-04, unverified)
