@@ -3,6 +3,10 @@
 ## Chat Output — WalletConnect Pairing
 - Don't print the ASCII QR block from `pair_ledger_live` into chat. Surface the `wc:` URI only — Ledger Live accepts a pasted URI, and the QR floods terminal scrollback.
 
+## Runtime Credential Lookup
+- **Before concluding a credential is absent, enumerate `projects[*].mcpServers[*].env` in `~/.claude.json` and its `.bak*` / `.backup` siblings.** `WALLETCONNECT_PROJECT_ID`, `ETHERSCAN_API_KEY`, and the RPC URLs are supplied as per-server env vars there, keyed by the project directory the server was registered under — a sibling directory's entry is invisible to `claude mcp list` run from this repo. `~/.vaultpilot-mcp/config.json`, the shell env, and dotfiles are all legitimately empty on a host configured this way.
+- Print key names and value shapes only, never values.
+
 ## Crypto/DeFi Transaction Preflight Checks
 - Before preparing any on-chain tx, verify: native gas/bandwidth (TRX bandwidth on TRON), lending pause flags (`isWithdrawPaused` / `isSupplyPaused`), min borrow/supply thresholds, ERC-20 approval status.
 - Never use `uint256.max` for collateral withdrawal — fetch the exact balance.
