@@ -1379,35 +1379,6 @@ export interface UnsignedTx {
    * signing. Absent for ops that don't bind to a durable identifier.
    */
   durableBindings?: import("../security/durable-binding.js").DurableBinding[];
-  /**
-   * Set to `true` when the prepared op falls into the Inv #12.5
-   * "hard-trigger ops list" (issue #501) — op classes where the
-   * second-LLM check is a precondition of `confirmed: true`, not
-   * an opt-in side offer. The verification renderer surfaces a
-   * `⚠ SECOND-LLM CHECK REQUIRED` line so the agent knows to call
-   * `get_verification_artifact({ handle })` and relay the
-   * `pasteableBlock` BEFORE asking the user to reply 'send'.
-   *
-   * Today's hard-trigger ops list (none currently shipped on this
-   * server — the flag is scaffold for when they land):
-   *   - EIP-7702 setCode (#481, deferred)
-   *   - Permit2 batch grants (#453, gated on Inv #1b/#2b)
-   *   - Opaque-facet bridges (#451, deferred — Wormhole / Mayan /
-   *     NEAR Intents / Across V3 with non-EVM destinations)
-   *   - Approval-management N-candidate selection (Inv #13 territory)
-   *   - Safe enableModule / setGuard / threshold changes
-   *
-   * Trust note: this is a workflow flag, not a cryptographic
-   * primitive. The agent could ignore it or self-attest the second-
-   * LLM check happened — same self-attestation gap as
-   * `userDecision: "send"`. Closing the gap requires infrastructure
-   * that doesn't exist today (provider-signed responses, TEE
-   * attestation, or zkML — discussed in the PR thread for #501).
-   * The flag is the smallest scaffold that lets future hard-trigger
-   * op classes hook into the existing verification block without
-   * a coordinated schema change at flag-add time.
-   */
-  secondLlmRequired?: boolean;
 }
 
 /** Shape of ~/.vaultpilot-mcp/config.json. */
