@@ -39,7 +39,7 @@ Defense in depth: server-side prepare↔send fingerprint, independent 4byte.dire
 
 ### Agent-side hardening (strongly recommended)
 
-The MCP's own `CHECKS PERFORMED` directives can be silently omitted by a compromised server. Install the companion [`vaultpilot-security-skill`](https://github.com/szhygulin/vaultpilot-security-skill) so the agent enforces cryptographic-integrity invariants regardless of what the MCP says — bytes decode, dispatch-target allowlist, hash recompute, chain-must-be-explicit, bridge-recipient cross-check, approval-class surfacing, mandatory second-LLM on hard-trigger ops, set-level intent verification, durable-binding source-of-truth:
+The MCP's own `CHECKS PERFORMED` directives can be silently omitted by a compromised server. Install the companion [`vaultpilot-security-skill`](https://github.com/szhygulin/vaultpilot-security-skill) so the agent enforces cryptographic-integrity invariants regardless of what the MCP says — bytes decode, dispatch-target allowlist, hash recompute, chain-must-be-explicit, bridge-recipient cross-check, approval-class surfacing, always-optional second-LLM offer surfaced on every preview, set-level intent verification, durable-binding source-of-truth:
 
 ```bash
 git clone https://github.com/szhygulin/vaultpilot-security-skill.git \
