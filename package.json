@@ -26,6 +26,7 @@
     "verify-personas": "node scripts/verify-personas.mjs",
     "verify:lifi-chain-ids": "node scripts/verify-lifi-chain-ids.mjs",
     "bench:tools": "node scripts/bench-tools.mjs",
+    "bench:latency": "node scripts/bench-latency.mjs",
     "bundle": "pkg .",
     "prepare": "patch-package"
   },
