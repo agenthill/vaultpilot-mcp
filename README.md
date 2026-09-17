@@ -8,7 +8,7 @@ Self-custodial DeFi for AI agents. The agent proposes, you approve on your Ledge
 
 ![VaultPilot MCP demo](./demo.gif)
 
-Read on-chain positions and prepare transactions across **Ethereum, Arbitrum, Polygon, Base, Optimism, TRON, Solana, Bitcoin, and Litecoin**. Supported protocols: **Aave V3, Compound V3, Morpho Blue, Uniswap V3 (swap + LP verbs), Curve, Lido, EigenLayer, Rocket Pool, Safe (Gnosis) multisig** on EVM, **MarginFi, Kamino, Marinade, Jito** on Solana, **SunSwap** on TRON, plus **LiFi** (EVM + EVM↔Solana + TRON + BTC swap/bridge) and **Jupiter v6** (Solana swap), with **1inch** as an optional EVM quote cross-check. EVM signs over WalletConnect → Ledger Live; TRON, Solana, Bitcoin and Litecoin sign over USB HID directly to the device (Ledger Live's WalletConnect bridge does not support those namespaces today). Works with **Claude Code** (CLI/terminal), **Cursor**, and any MCP-compatible client over stdio. **Claude.ai chat (web + native desktop app) needs a hosted MCP endpoint** — [on the roadmap](./ROADMAP.md#deployment-modes), not yet shipped.
+Read on-chain positions and prepare transactions across **Ethereum, Arbitrum, Polygon, Base, Optimism, TRON, Solana, Bitcoin, and Litecoin**. Supported protocols: **Aave V3, Compound V3, Morpho Blue, Uniswap V3 (swap + LP verbs), Curve, Lido, EigenLayer, Rocket Pool, Safe (Gnosis) multisig** on EVM, **MarginFi, Kamino, Marinade, Jito** on Solana, **SunSwap** on TRON, plus **LiFi** (EVM + EVM↔Solana + TRON + BTC swap/bridge) and **Jupiter v6** (Solana swap), with **1inch** as an optional EVM quote cross-check. EVM signs over WalletConnect → Ledger Live; TRON, Solana, Bitcoin and Litecoin sign over USB HID directly to the device (Ledger Live's WalletConnect bridge does not support those namespaces today). Works with **Claude Code** (CLI/terminal), **Cursor**, and any MCP-compatible client over stdio. **Claude.ai chat (web + native desktop app) needs a hosted MCP endpoint** — [on the roadmap](./docs/ROADMAP.md#deployment-modes), not yet shipped.
 
 > Agents: read **[AGENTS.md](./AGENTS.md)**. One-line prompt to paste into Claude Code / Cursor / any MCP-capable agent:
 > ```
@@ -35,7 +35,7 @@ Compromise model: the AI agent, MCP server, and host computer can all be attacke
 user-intent ──► agent ──► MCP server ──► WalletConnect / USB-HID ──► Ledger Live / host ──► Ledger device
 ```
 
-Defense in depth: server-side prepare↔send fingerprint, independent 4byte.directory selector check, agent-side ABI decode + pre-sign hash recompute, on-device clear-sign or blind-sign-hash match, WalletConnect session-topic cross-check, `previewToken`/`userDecision` gate, and `get_verification_artifact` for second-LLM cross-verification on high-value flows. **See [SECURITY.md](./SECURITY.md)** for the full threat model, defenses table, residual risks, and verification recipes.
+Defense in depth: server-side prepare↔send fingerprint, independent 4byte.directory selector check, agent-side ABI decode + pre-sign hash recompute, on-device clear-sign or blind-sign-hash match, WalletConnect session-topic cross-check, `previewToken`/`userDecision` gate, and `get_verification_artifact` for second-LLM cross-verification on high-value flows. **See [SECURITY.md](./docs/SECURITY.md)** for the full threat model, defenses table, residual risks, and verification recipes.
 
 ### Agent-side hardening (strongly recommended)
 
@@ -67,13 +67,13 @@ Restart, then type `/setup`.
 
 **Solana** — SOL + SPL balances, MarginFi + Kamino lending, Marinade / Jito / native stake-account reads with SOL-equivalent valuation, Jupiter v6 quotes, Helius DAS NFT portfolio. Writes cover SOL/SPL transfers, MarginFi + Kamino supply/withdraw/borrow/repay, Jupiter swaps, Marinade stake + immediate-unstake, Jito stake-pool deposit, native SOL delegate/deactivate/withdraw, and LiFi-routed EVM↔Solana bridging. Per-wallet durable-nonce account (~0.00144 SOL rent, reclaimable) protects sends from blockhash expiry during Ledger review (`prepare_solana_nonce_init` / `_close`). SPL / MarginFi / Kamino / Jupiter / Jito blind-sign against a Message Hash — enable **Allow blind signing** in the Solana app's Settings; SOL native transfers clear-sign. Pair once per session via `pair_ledger_solana`.
 
-**Bitcoin + Litecoin** — balance, UTXO, fee-estimate, and tx-history readers via Esplora (mempool.space / litecoinspace.org). Native segwit + taproot sends, BIP-125 RBF fee-bumps, multisig PSBT (combine / sign / finalize), BIP-137 message signing, LiFi-routed BTC→EVM/Solana swaps. Optional Bitcoin Core / Litecoin Core JSON-RPC unlocks forensic tools that Esplora cannot serve (chain tips, block stats, mempool summary) — see [INSTALL.md §9](./INSTALL.md#9-troubleshooting) for setup. Pair once via `pair_ledger_btc` / `pair_ledger_ltc`.
+**Bitcoin + Litecoin** — balance, UTXO, fee-estimate, and tx-history readers via Esplora (mempool.space / litecoinspace.org). Native segwit + taproot sends, BIP-125 RBF fee-bumps, multisig PSBT (combine / sign / finalize), BIP-137 message signing, LiFi-routed BTC→EVM/Solana swaps. Optional Bitcoin Core / Litecoin Core JSON-RPC unlocks forensic tools that Esplora cannot serve (chain tips, block stats, mempool summary) — see [INSTALL.md §9](./docs/INSTALL.md#9-troubleshooting) for setup. Pair once via `pair_ledger_btc` / `pair_ledger_ltc`.
 
 Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verified 2026-04-14) or expose Solana accounts (verified 2026-04-23) or expose BTC/LTC namespaces, which is why those paths use USB HID. Readers short-circuit cleanly on chains where a protocol isn't deployed.
 
 ## Roadmap
 
-[ROADMAP.md](./ROADMAP.md).
+[ROADMAP.md](./docs/ROADMAP.md).
 
 ## Tools
 
@@ -112,7 +112,7 @@ Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verifie
 - `get_swap_quote` (LiFi, EVM), `get_solana_swap_quote` (Jupiter v6)
 - `check_contract_security`, `check_permission_risks`, `get_protocol_risk_score`, `get_contract_abi`, `read_contract`
 - `simulate_transaction` — EVM `eth_call` preview (Solana equivalent runs inside `preview_solana_send`)
-- `verify_tx_decode`, `get_verification_artifact`, `get_tx_verification` — second-LLM cross-verification + 15-min-TTL handle re-emit ([details](./SECURITY.md#second-agent-verification-optional-for-the-coordinated-agent-case))
+- `verify_tx_decode`, `get_verification_artifact`, `get_tx_verification` — second-LLM cross-verification + 15-min-TTL handle re-emit ([details](./docs/SECURITY.md#second-agent-verification-optional-for-the-coordinated-agent-case))
 
 **Diagnostics:**
 
@@ -165,7 +165,7 @@ Ledger Live's WalletConnect bridge does not honor the `tron:` namespace (verifie
 
 ## Install
 
-Three paths — full instructions, MCP-client wiring, Gatekeeper / SmartScreen handling, update / uninstall in **[INSTALL.md](./INSTALL.md)**.
+Three paths — full instructions, MCP-client wiring, Gatekeeper / SmartScreen handling, update / uninstall in **[INSTALL.md](./docs/INSTALL.md)**.
 
 | Path | TL;DR |
 |---|---|
@@ -202,9 +202,9 @@ For Solana RPC throttling under multi-tool fan-out, inject a [Helius](https://he
 
 ## Use with Claude Code (CLI) / Cursor / Claude Desktop
 
-`vaultpilot-mcp setup` detects installed clients and registers vaultpilot-mcp with each (existing configs backed up to `<file>.vaultpilot.bak`). Per-project / per-workspace configs are skipped — the wizard runs from arbitrary CWD. For manual wiring or the per-client config paths, see [INSTALL.md §5](./INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run).
+`vaultpilot-mcp setup` detects installed clients and registers vaultpilot-mcp with each (existing configs backed up to `<file>.vaultpilot.bak`). Per-project / per-workspace configs are skipped — the wizard runs from arbitrary CWD. For manual wiring or the per-client config paths, see [INSTALL.md §5](./docs/INSTALL.md#5-manual-mcp-client-wiring-if-auto-register-didnt-run).
 
-> **Claude.ai chat — limitation.** Local stdio MCP installed via the wizard registers cleanly with the Claude.ai native desktop app, but the host environment's outbound-HTTP allowlist blocks chain RPC providers (PublicNode, public Solana mainnet, Alchemy, Helius, etc.). The MCP initializes and processes tool calls, but every read that hits an external RPC fails with 403 / "Host not in allowlist". The same applies to Claude Code running inside Claude.ai's cloud sandbox. **Working today**: Claude Code CLI in your terminal, Cursor, Claude Desktop on a host with unrestricted outbound HTTP. **Future**: a hosted MCP endpoint ([roadmap](./ROADMAP.md#deployment-modes), not yet shipped) will give Claude.ai chat a network-unrestricted backend; TRON / Solana / Bitcoin / Litecoin USB-HID signing requires a local Ledger and stays on the terminal CLI / Cursor path regardless.
+> **Claude.ai chat — limitation.** Local stdio MCP installed via the wizard registers cleanly with the Claude.ai native desktop app, but the host environment's outbound-HTTP allowlist blocks chain RPC providers (PublicNode, public Solana mainnet, Alchemy, Helius, etc.). The MCP initializes and processes tool calls, but every read that hits an external RPC fails with 403 / "Host not in allowlist". The same applies to Claude Code running inside Claude.ai's cloud sandbox. **Working today**: Claude Code CLI in your terminal, Cursor, Claude Desktop on a host with unrestricted outbound HTTP. **Future**: a hosted MCP endpoint ([roadmap](./docs/ROADMAP.md#deployment-modes), not yet shipped) will give Claude.ai chat a network-unrestricted backend; TRON / Solana / Bitcoin / Litecoin USB-HID signing requires a local Ledger and stays on the terminal CLI / Cursor path regardless.
 
 ## Environment variables
 
@@ -231,7 +231,7 @@ npm run test:watch
 
 ## Contributing
 
-PRs welcome. The CLA Assistant bot will ask you to sign the [Contributor License Agreement](./CLA.md) on your first PR — one signature covers all future PRs. The CLA grants the project the right to relicense your contribution; without it, the BUSL-1.1 → Apache 2.0 auto-conversion in 2030 would get stuck. Repo owner and Dependabot are exempt.
+PRs welcome. The CLA Assistant bot will ask you to sign the [Contributor License Agreement](./docs/CLA.md) on your first PR — one signature covers all future PRs. The CLA grants the project the right to relicense your contribution; without it, the BUSL-1.1 → Apache 2.0 auto-conversion in 2030 would get stuck. Repo owner and Dependabot are exempt.
 
 ## License
 

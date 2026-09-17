@@ -1,6 +1,6 @@
 # Installing VaultPilot
 
-> **Agents installing on the user's behalf**: use the [one-line install](#one-line-install-for-agents-and-power-users) below. See [AGENTS.md](./AGENTS.md) for consent + post-install relay conventions.
+> **Agents installing on the user's behalf**: use the [one-line install](#one-line-install-for-agents-and-power-users) below. See [AGENTS.md](../AGENTS.md) for consent + post-install relay conventions.
 
 Four paths. All converge on the same end state: a `vaultpilot-mcp` server binary your MCP client runs, plus a one-time setup wizard that writes `~/.vaultpilot-mcp/config.json`.
 
@@ -29,7 +29,7 @@ curl -fsSL https://github.com/szhygulin/vaultpilot-mcp/releases/latest/download/
 iwr https://github.com/szhygulin/vaultpilot-mcp/releases/latest/download/install.ps1 -UseBasicParsing | iex
 ```
 
-What happens: detect OS+arch (Linux x64, macOS x64/arm64, Windows x64; Linux arm64 falls back to "use Path B"); atomic download; macOS Gatekeeper xattr stripped; PATH checked (script prints the `export PATH="…"` line if missing — never edits your rc); wizard runs, registers with detected MCP clients (Claude Desktop, Claude Code, Cursor) and clones companion preflight + setup skills into `~/.claude/skills/`; emits `InstallEnvelope` JSON on stdout (shape in [`src/setup/output-json.ts`](./src/setup/output-json.ts)).
+What happens: detect OS+arch (Linux x64, macOS x64/arm64, Windows x64; Linux arm64 falls back to "use Path B"); atomic download; macOS Gatekeeper xattr stripped; PATH checked (script prints the `export PATH="…"` line if missing — never edits your rc); wizard runs, registers with detected MCP clients (Claude Desktop, Claude Code, Cursor) and clones companion preflight + setup skills into `~/.claude/skills/`; emits `InstallEnvelope` JSON on stdout (shape in [`src/setup/output-json.ts`](../src/setup/output-json.ts)).
 
 **Idempotent.** Re-runs re-download (this is the update path) and the wizard recognizes already-present components, emitting `status: "already_installed"`.
 
@@ -43,7 +43,7 @@ What happens: detect OS+arch (Linux x64, macOS x64/arm64, Windows x64; Linux arm
 | `VAULTPILOT_RELEASE_URL` | `https://github.com/szhygulin/vaultpilot-mcp/releases/latest/download` | Source of binaries (mirrors / smoke tests) |
 | `VAULTPILOT_REPO` | `szhygulin/vaultpilot-mcp` | Underlying repo (only when `VAULTPILOT_RELEASE_URL` is unset) |
 
-**Security.** Read [`scripts/install.sh`](./scripts/install.sh) / [`scripts/install.ps1`](./scripts/install.ps1) before running. They never `sudo`, never edit your shell rc, never collect keys, never pair your Ledger.
+**Security.** Read [`scripts/install.sh`](../scripts/install.sh) / [`scripts/install.ps1`](../scripts/install.ps1) before running. They never `sudo`, never edit your shell rc, never collect keys, never pair your Ledger.
 
 ## Path A — Bundled binary
 
@@ -71,7 +71,7 @@ chmod +x ~/.local/bin/vaultpilot-mcp-macos-*
 xattr -d com.apple.quarantine ~/.local/bin/vaultpilot-mcp-macos-* 2>/dev/null
 ```
 
-…or right-click in Finder → **Open** → **Open** in the dialog (one-time per file). The "could not verify" warning is Gatekeeper; binaries are built in public CI ([`.github/workflows/release-binaries.yml`](./.github/workflows/release-binaries.yml)), code-signing is on the roadmap.
+…or right-click in Finder → **Open** → **Open** in the dialog (one-time per file). The "could not verify" warning is Gatekeeper; binaries are built in public CI ([`.github/workflows/release-binaries.yml`](../.github/workflows/release-binaries.yml)), code-signing is on the roadmap.
 
 **Linux:**
 
@@ -284,4 +284,4 @@ When unset, RPC-gated tools return `available: false` with a setup hint — they
 
 ## What's bundled inside the binary
 
-Each binary contains the Node 22 runtime, compiled `dist/` JS, every npm dep, and platform-specific native `.node` artifacts for `node-hid`, `usb`, `bufferutil`, `utf-8-validate`. Built per-OS via [`@yao-pkg/pkg`](https://github.com/yao-pkg/pkg) — see [`.github/workflows/release-binaries.yml`](./.github/workflows/release-binaries.yml). At first launch, the runtime extracts native files to a platform-specific cache (override via `PKG_NATIVE_CACHE_PATH`).
+Each binary contains the Node 22 runtime, compiled `dist/` JS, every npm dep, and platform-specific native `.node` artifacts for `node-hid`, `usb`, `bufferutil`, `utf-8-validate`. Built per-OS via [`@yao-pkg/pkg`](https://github.com/yao-pkg/pkg) — see [`.github/workflows/release-binaries.yml`](../.github/workflows/release-binaries.yml). At first launch, the runtime extracts native files to a platform-specific cache (override via `PKG_NATIVE_CACHE_PATH`).
