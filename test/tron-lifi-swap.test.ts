@@ -264,6 +264,55 @@ describe("buildTronLifiSwap — happy path", () => {
   });
 });
 
+describe("buildTronLifiSwap — destination namespace (#799)", () => {
+  const destinations = [
+    { toChain: "ethereum", id: 1n },
+    { toChain: "arbitrum", id: 42161n },
+    { toChain: "polygon", id: 137n },
+    { toChain: "base", id: 8453n },
+    { toChain: "optimism", id: 10n },
+    { toChain: "solana", id: 1151111081099710n },
+  ] as const;
+
+  for (const { toChain, id } of destinations) {
+    it.each([
+      { bridge: "near", encodedId: id, accepted: true },
+      { bridge: "near", encodedId: 1885080386571452n, accepted: false },
+      { bridge: "NEAR", encodedId: 1885080386571452n, accepted: false },
+      { bridge: "symbiosis", encodedId: 1885080386571452n, accepted: false },
+    ])(`checks ${toChain} against $encodedId with bridge=$bridge`, async ({ bridge, encodedId, accepted }) => {
+      fetchQuoteMock.mockResolvedValue(makeTronLifiQuote({
+        bridgeData: {
+          transactionId: ("0x" + "33".repeat(32)) as `0x${string}`,
+          bridge,
+          integrator: "vaultpilot-mcp",
+          referrer: "0x0000000000000000000000000000000000000000",
+          sendingAssetId: "0x0000000000000000000000000000000000000001",
+          receiver: toChain === "solana" ? NON_EVM_RECEIVER_SENTINEL : EVM_RECIPIENT,
+          minAmount: 9_900_000n,
+          destinationChainId: encodedId,
+          hasSourceSwaps: false,
+          hasDestinationCall: false,
+        },
+      }));
+      const { buildTronLifiSwap } = await import("../src/modules/tron/lifi-swap.js");
+      const result = buildTronLifiSwap({
+        wallet: TRON_WALLET,
+        fromToken: TRON_USDT,
+        fromAmount: "10000000",
+        toChain,
+        toToken: toChain === "solana" ? SOL_USDC : ETH_USDT,
+        toAddress: toChain === "solana" ? SOL_RECIPIENT : EVM_RECIPIENT,
+      });
+      if (accepted) {
+        await expect(result).resolves.toMatchObject({ action: "lifi_swap" });
+      } else {
+        await expect(result).rejects.toThrow(/destinationChainId mismatch/);
+      }
+    });
+  }
+});
+
 describe("buildTronLifiSwap — rejection paths", () => {
   it("rejects malformed wallet (not TRON base58)", async () => {
     const { buildTronLifiSwap } = await import(

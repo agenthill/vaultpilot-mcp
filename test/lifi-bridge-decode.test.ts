@@ -91,7 +91,10 @@ describe("decodeCalldata — LiFi bridge fallback", () => {
     expect(named.destinationChainId.valueHuman).toContain("arbitrum");
   });
 
-  it("flags the non-EVM sentinel + resolves Solana destination chain ID", () => {
+  it.each([
+    [1151111081099710n, "solana"],
+    [1885080386571452n, "tron"],
+  ] as const)("flags the non-EVM sentinel + resolves chain ID %s to %s", (id, chain) => {
     const bd: BridgeDataInput = {
       transactionId: ("0x" + "22".repeat(32)) as `0x${string}`,
       bridge: "wormhole",
@@ -100,7 +103,7 @@ describe("decodeCalldata — LiFi bridge fallback", () => {
       sendingAssetId: USDC_ETHEREUM_LOWER as `0x${string}`,
       receiver: NON_EVM_RECEIVER_SENTINEL as `0x${string}`,
       minAmount: 9_950_000n,
-      destinationChainId: 1151111081099710n, // LiFi-encoded Solana chain ID
+      destinationChainId: id,
       hasSourceSwaps: false,
       hasDestinationCall: false,
     };
@@ -114,8 +117,8 @@ describe("decodeCalldata — LiFi bridge fallback", () => {
     expect(named.receiver.value.toLowerCase()).toBe(NON_EVM_RECEIVER_SENTINEL);
     expect(named.receiver.valueHuman).toContain("LiFi non-EVM sentinel");
     expect(named.receiver.valueHuman).toContain("NOT decoded by this server");
-    expect(named.destinationChainId.value).toBe("1151111081099710");
-    expect(named.destinationChainId.valueHuman).toContain("solana");
+    expect(named.destinationChainId.value).toBe(id.toString());
+    expect(named.destinationChainId.valueHuman).toBe(`${chain} (${id})`);
   });
 
   it("renders unknown destination chain IDs as `chain <id>` rather than dropping", () => {

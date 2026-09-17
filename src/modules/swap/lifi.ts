@@ -23,9 +23,9 @@ export function initLifi(): void {
 export const LIFI_SOLANA_CHAIN_ID = 1151111081099710 as const;
 
 /**
- * LiFi numeric chain ID for TRON. Same value as TRON's standard chain ID
- * (728126428), since TRON uses an EVM-compatible chain ID — but LiFi's
- * routing graph still labels it as a TVM chain (chainType: "TVM"). Probe:
+ * LiFi API chain ID for TRON (chainType: "TVM"). This is NOT the on-chain
+ * BridgeData.destinationChainId; that namespace uses 1885080386571452
+ * (see lifi-chain-ids.ts). Keep quote/status requests in the API namespace:
  * GET https://li.quest/v1/chains?chainTypes=TVM returns id=728126428.
  */
 export const LIFI_TRON_CHAIN_ID = 728126428 as const;

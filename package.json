@@ -24,6 +24,7 @@
     "test:watch": "vitest",
     "lint": "eslint src",
     "verify-personas": "node scripts/verify-personas.mjs",
+    "verify:lifi-chain-ids": "node scripts/verify-lifi-chain-ids.mjs",
     "bench:tools": "node scripts/bench-tools.mjs",
     "bundle": "pkg .",
     "prepare": "patch-package"
