@@ -4,12 +4,6 @@ import { NATIVE_SYMBOL } from "../../config/contracts.js";
 import { formatArgs, formatNativeShort, formatRecipientSuffix, truncateHex } from "./format.js";
 
 /**
- * Render the VERIFY-BEFORE-SIGNING text block that every `prepare_*` tool
- * ends with. Returned as a separate MCP content element; the server-level
- * `instructions` field tells orchestrator agents to forward it verbatim.
- */
-
-/**
  * ERC-20 `approve(address,uint256)` selector. Ledger's Ethereum app
  * clear-signs approvals natively (showing spender + amount on-device), so
  * the swiss-knife cross-check adds no security here and just lengthens
@@ -150,6 +144,11 @@ function formatDecoder(v: TxVerification): string {
   return `  Decoder: (paste manually) ${v.decoderPasteInstructions}`;
 }
 
+/**
+ * Render the VERIFY-BEFORE-SIGNING text block that every `prepare_*` tool
+ * ends with. Returned as a separate MCP content element; the server-level
+ * `instructions` field tells orchestrator agents to forward it verbatim.
+ */
 export function renderVerificationBlock(
   tx: Pick<
     UnsignedTx,
