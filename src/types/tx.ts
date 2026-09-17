@@ -492,3 +492,217 @@ export interface UnsignedTx {
    */
   durableBindings?: import("../security/durable-binding.js").DurableBinding[];
 }
+
+/**
+ * Unsigned Bitcoin transaction. Parallel to `UnsignedTronTx` /
+ * `UnsignedSolanaTx`. Stores a PSBT (Partially Signed Bitcoin
+ * Transaction, BIP-174) — the device signs it via
+ * `@ledgerhq/hw-app-btc`'s `signPsbtBuffer`, we finalize, extract the
+ * tx hex, and broadcast via the indexer.
+ *
+ * `decoded.outputs[]` and `decoded.changeOutput` carry the human-
+ * readable preview the agent surfaces to the user. The PSBT bytes are
+ * the source of truth — the device walks every output (including
+ * change, with the "change" label when the path matches the wallet's
+ * internal chain) and shows fee + total before asking for approval.
+ */
+export interface UnsignedBitcoinTx {
+  chain: "bitcoin";
+  /**
+   * Discriminator for the action.
+   *  - `native_send` — Phase 1 single-output send (also used by issue
+   *    #264 multi-source consolidation).
+   *  - `rbf_bump` — BIP-125 fee replacement of a stuck mempool tx.
+   *    Same input set as the original, recipients preserved verbatim,
+   *    the bump is absorbed by the change output.
+   */
+  action: "native_send" | "rbf_bump";
+  /**
+   * RBF replacement context — populated only on `action === "rbf_bump"`.
+   * Lets the verification block surface "replacing TX <txid>" and the
+   * old → new fee/fee-rate delta so the user reviews the bump itself,
+   * not just the new tx in isolation. The original tx is identified by
+   * `txid`; `oldFeeSats` + `oldFeeRateSatPerVb` come from the indexer.
+   */
+  replaces?: {
+    txid: string;
+    oldFeeSats: string;
+    oldFeeRateSatPerVb: number;
+  };
+  /**
+   * Primary source address (the first entry in `sources` for multi-source
+   * sends, or the only source for single-source sends). Kept for
+   * backwards compat — handlers and the verification block treat this as
+   * the "from" label. Multi-source consumers should read `sources`.
+   */
+  from: string;
+  /**
+   * All source addresses contributing UTXOs to this tx. One entry per
+   * unique source. Issue #264 — multi-input consolidation. For
+   * single-source sends this is a one-element array; the signer treats
+   * both shapes uniformly. All sources share `accountPath` +
+   * `addressFormat` (Phase 1 intra-account / uniform-type constraint).
+   */
+  sources: Array<{
+    address: string;
+    /** Full leaf path of the source address, e.g. `84'/0'/0'/0/N`. */
+    path: string;
+    /** Compressed (or uncompressed; signer compresses) public key hex. */
+    publicKey: string;
+  }>;
+  /**
+   * Per-PSBT-input source address — `inputSources[i]` names which entry
+   * in `sources` provided the i-th PSBT input. Used by the LTC legacy
+   * `createPaymentTransaction` fallback to populate `associatedKeysets`
+   * with the per-input path; the modern `signPsbtBuffer` path keys off
+   * the witness program in each input's `witnessUtxo` script and looks
+   * up the source via `knownAddressDerivations`. Length equals the PSBT
+   * input count, in PSBT input order.
+   */
+  inputSources: string[];
+  /** Base64-encoded PSBT v0 bytes. The device's `signPsbtBuffer` consumes this. */
+  psbtBase64: string;
+  /**
+   * BIP-32 account-level path (e.g. `m/84'/0'/0'`) the PSBT signs from.
+   * `signPsbtBuffer` requires this so it can populate missing BIP-32
+   * derivation info on the PSBT inputs.
+   */
+  accountPath: string;
+  /**
+   * Address format the account uses — passed explicitly to
+   * `signPsbtBuffer.addressFormat`. "bech32" for native segwit, etc.
+   */
+  addressFormat: "legacy" | "p2sh" | "bech32" | "bech32m";
+  /**
+   * Internal-chain (BIP-32 chain=1) address the change output goes to,
+   * plus its derivation. Threaded to the signer so it can register the
+   * change output in `signPsbtBuffer.knownAddressDerivations` (and, for
+   * the legacy `createPaymentTransaction` fallback, populate
+   * `changePath`). Without this, the Ledger BTC app v2.x flags every
+   * change output as "unusual change path". Issue #254.
+   *
+   * Optional only for tx envelopes built by older code paths or by
+   * clients that pre-validated they want change-on-source — the modern
+   * Phase-1 builder always sets it.
+   */
+  change?: {
+    address: string;
+    /** Full leaf path of the change address, e.g. `84'/0'/0'/1/0`. */
+    path: string;
+    /** Compressed (or uncompressed; signer compresses) public key hex. */
+    publicKey: string;
+  };
+  /** Human-readable description for the preview. */
+  description: string;
+  /** Decoded outputs + fee + RBF flag. The shape Ledger's screen mirrors. */
+  decoded: {
+    functionName: string;
+    args: Record<string, string>;
+    outputs: Array<{
+      address: string;
+      amountSats: string;
+      amountBtc: string;
+      isChange: boolean;
+      /** Path of the change output (when isChange=true), e.g. `m/84'/0'/0'/1/0`. */
+      changePath?: string;
+    }>;
+    /**
+     * Per-source breakdown — one entry per unique source contributing a
+     * UTXO to this tx. Mirrors the verification-block "From: each source
+     * address with sats pulled" line (issue #264). Always populated;
+     * single-source sends produce a one-element array.
+     */
+    sources: Array<{
+      address: string;
+      /** Total sats pulled from this source across all selected inputs. */
+      pulledSats: string;
+      /** Same value as `pulledSats`, formatted as a BTC decimal string. */
+      pulledBtc: string;
+      /** How many of the PSBT's inputs come from this source. */
+      inputCount: number;
+    }>;
+    feeSats: string;
+    feeBtc: string;
+    feeRateSatPerVb: number;
+    /** Sequence number — < 0xFFFFFFFE marks the tx BIP-125 RBF-eligible. */
+    rbfEligible: boolean;
+  };
+  /** Estimated tx vsize, used to derive the displayed feeRateSatPerVb. */
+  vsize: number;
+  /** Opaque handle — see btc-tx-store.ts. send_transaction consumes this. */
+  handle?: string;
+  /**
+   * Domain-tagged sha256 over the PSBT base64. Pair-consistency
+   * anchor between prepare → preview → sign stages. NOT shown
+   * on-device (Ledger BTC clear-signs outputs; on-device anchor is
+   * address + amount per output).
+   */
+  fingerprint?: `0x${string}`;
+  /**
+   * Address-book recipient metadata — see `UnsignedTx.recipient`.
+   * Populated when `args.to` matched a contact label (or reverse-
+   * decorated to a saved one). Threaded into the verification block.
+   */
+  recipient?: {
+    label?: string;
+    source: "literal" | "contact" | "ens" | "unknown";
+    warnings?: string[];
+  };
+}
+
+/**
+ * Unsigned Litecoin transaction. Mirror of `UnsignedBitcoinTx` —
+ * same PSBT-v0 shape, same Ledger app interface (currency:"litecoin"
+ * on the SDK side selects Litecoin-specific encoding). Symbol fields
+ * use LTC, but the on-wire bytes (PSBT, raw tx hex) use the same
+ * format as BTC.
+ */
+export interface UnsignedLitecoinTx {
+  chain: "litecoin";
+  action: "native_send";
+  from: string;
+  /** See `UnsignedBitcoinTx.sources`. Issue #264. */
+  sources: Array<{
+    address: string;
+    path: string;
+    publicKey: string;
+  }>;
+  /** See `UnsignedBitcoinTx.inputSources`. Issue #264. */
+  inputSources: string[];
+  psbtBase64: string;
+  accountPath: string;
+  addressFormat: "legacy" | "p2sh" | "bech32" | "bech32m";
+  /** See `UnsignedBitcoinTx.change`. Issue #254. */
+  change?: {
+    address: string;
+    path: string;
+    publicKey: string;
+  };
+  description: string;
+  decoded: {
+    functionName: string;
+    args: Record<string, string>;
+    outputs: Array<{
+      address: string;
+      amountSats: string;
+      amountLtc: string;
+      isChange: boolean;
+      changePath?: string;
+    }>;
+    /** See `UnsignedBitcoinTx.decoded.sources`. Issue #264. */
+    sources: Array<{
+      address: string;
+      pulledSats: string;
+      pulledLtc: string;
+      inputCount: number;
+    }>;
+    feeSats: string;
+    feeLtc: string;
+    feeRateSatPerVb: number;
+    rbfEligible: boolean;
+  };
+  vsize: number;
+  /** Opaque handle — see ltc-tx-store.ts. */
+  handle?: string;
+  fingerprint?: `0x${string}`;
+}
