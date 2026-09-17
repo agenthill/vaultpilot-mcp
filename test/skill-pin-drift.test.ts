@@ -51,9 +51,9 @@ describe("constants", () => {
     expect(assembled).toMatch(/^VAULTPILOT_PREFLIGHT_INTEGRITY_v[0-9]+_[0-9a-f]{16}$/);
   });
 
-  it("SKILL_MD_RAW_URL points at vaultpilot-security-skill master", () => {
+  it("SKILL_MD_RAW_URL points at vaultpilot-security-skill main", () => {
     expect(SKILL_MD_RAW_URL).toMatch(
-      /^https:\/\/raw\.githubusercontent\.com\/szhygulin\/vaultpilot-security-skill\/master\/SKILL\.md$/,
+      /^https:\/\/raw\.githubusercontent\.com\/szhygulin\/vaultpilot-security-skill\/main\/SKILL\.md$/,
     );
   });
 });
@@ -73,7 +73,7 @@ describe("checkSkillPinDrift", () => {
     // immutably. So: build content whose hash equals the live PIN by
     // making the body's bytes such that sha256(bytes) === EXPECTED_SKILL_SHA256
     // — impossible without preimage. Instead, the realistic test is:
-    // we trust the production constant points at canonical master, so
+    // we trust the production constant points at canonical main, so
     // we mock fetch to return a body THAT WHEN HASHED equals
     // EXPECTED_SKILL_SHA256. The way to do that: serve a body whose
     // hash happens to be the constant — only achievable by fetching

@@ -44,7 +44,7 @@ import { createHash } from "node:crypto";
 
 /**
  * SHA-256 of `SKILL.md` from the canonical
- * `vaultpilot-security-skill` master that this MCP version was
+ * `vaultpilot-security-skill` main that this MCP version was
  * tested against. Bump in lockstep with skill releases per the
  * coordinated-release workflow documented in the skill repo's README.
  *
@@ -53,7 +53,7 @@ import { createHash } from "node:crypto";
  * literal a second time.
  */
 export const EXPECTED_SKILL_SHA256 =
-  "7fbb1b5f40614ee5e63760fd023661fb36c7005d3d42ac7d3bef9230da7c9781";
+  "399b6e58a9d1b14b3cbefb33f67eb9719102b5ecfd1d8a1bc81082d581a3a5c0";
 
 /**
  * Sentinel fragments. Assembled from three pieces so the full literal
@@ -63,12 +63,12 @@ export const EXPECTED_SKILL_SHA256 =
  * search the `Skill` tool's result text for the assembled value.
  */
 export const EXPECTED_SKILL_SENTINEL_A = "VAULTPILOT_PREFLIGHT_INTEGRITY";
-export const EXPECTED_SKILL_SENTINEL_B = "_v16_";
-export const EXPECTED_SKILL_SENTINEL_C = "f8475b7b8e0ad19f";
+export const EXPECTED_SKILL_SENTINEL_B = "_v17_";
+export const EXPECTED_SKILL_SENTINEL_C = "accad44c20cf5141";
 
-/** Raw GitHub URL of the canonical `SKILL.md` on `master`. */
+/** Raw GitHub URL of the canonical `SKILL.md` on `main`. */
 export const SKILL_MD_RAW_URL =
-  "https://raw.githubusercontent.com/szhygulin/vaultpilot-security-skill/master/SKILL.md";
+  "https://raw.githubusercontent.com/szhygulin/vaultpilot-security-skill/main/SKILL.md";
 
 /** Hard timeout on the network fetch — fail-soft if the request stalls. */
 const FETCH_TIMEOUT_MS = 5_000;
@@ -111,7 +111,7 @@ export async function checkSkillPinDrift(): Promise<SkillPinDriftResult> {
       signal: controller.signal,
       // Avoid CDN caching surprises by asking for the freshest copy
       // — the raw.githubusercontent.com endpoint already serves
-      // master tip with short TTL, but it's cheap belt-and-suspenders.
+      // main tip with short TTL, but it's cheap belt-and-suspenders.
       headers: { "Cache-Control": "no-cache" },
     });
     if (!response.ok) {
@@ -236,7 +236,7 @@ function renderSkillPinDriftWarning(args: {
     "         integrity self-check halts with `vaultpilot-preflight",
     "         skill integrity check FAILED — DO NOT SIGN.` on hash",
     "         mismatch (skill v0.4.1+).",
-    `Install: ${SKILL_MD_RAW_URL.replace("/raw.githubusercontent.com", "/github.com").replace("/master/SKILL.md", "")}`,
+    `Install: ${SKILL_MD_RAW_URL.replace("/raw.githubusercontent.com", "/github.com").replace("/main/SKILL.md", "")}`,
     "         (the fix is server-side: this MCP needs a release with the",
     "         updated pin. The user can either upgrade vaultpilot-mcp",
     "         when the next release ships, or pin their local skill",

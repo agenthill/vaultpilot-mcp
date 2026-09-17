@@ -156,8 +156,8 @@ function describeBridgeChainId(id: bigint): string {
       return "gnosis (100)";
     case 1151111081099710n:
       return "solana (1151111081099710)";
-    case 728126428n:
-      return "tron (728126428)";
+    case 1885080386571452n:
+      return "tron (1885080386571452)";
     case 20000000000001n:
       return "bitcoin (20000000000001)";
     case 9270000000000000n:

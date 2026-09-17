@@ -110,12 +110,19 @@ describe("getInstallPath", () => {
   });
 
   it("detects npm-global on homebrew prefix", () => {
-    setProcessShape({
-      argv0: "/usr/bin/node",
-      argv1: "/opt/homebrew/lib/node_modules/vaultpilot-mcp/dist/index.js",
-    });
-    const info = getInstallPath();
-    expect(info.kind).toBe("npm-global");
+    // A real /opt/homebrew can itself contain .git. Keep the global-install
+    // fixture outside the host's Homebrew checkout so this tests only its shape.
+    const root = mkdtempSync(join(tmpdir(), "vaultpilot-homebrew-"));
+    try {
+      setProcessShape({
+        argv0: "/usr/bin/node",
+        argv1: join(root, "homebrew/lib/node_modules/vaultpilot-mcp/dist/index.js"),
+      });
+      const info = getInstallPath();
+      expect(info.kind).toBe("npm-global");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("detects from-source via .git ancestor", () => {

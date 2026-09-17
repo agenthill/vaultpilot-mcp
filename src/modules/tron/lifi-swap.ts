@@ -12,7 +12,7 @@ import {
   type DecodedLifiBridgeData,
 } from "../../signing/decode-calldata.js";
 import { NON_EVM_RECEIVER_SENTINEL } from "../../abis/lifi-diamond.js";
-import { matchIntermediateChainBridge } from "../swap/intermediate-chain-bridges.js";
+import { assertLifiDestinationChain } from "../swap/lifi-chain-ids.js";
 import { SOLANA_ADDRESS } from "../../shared/address-patterns.js";
 import { getAddress } from "viem";
 import type { SupportedChain, UnsignedTronTx } from "../../types/index.js";
@@ -76,21 +76,6 @@ import type { SupportedChain, UnsignedTronTx } from "../../types/index.js";
 
 /** TRON LiFi Diamond — same routing engine as EVM, deployed on TRON mainnet. */
 const TRON_LIFI_DIAMOND = "TU3ymitEKCWQFtASkEeHaPb8NfZcJtCHLt";
-
-/**
- * Same chain-id table as `swap/index.ts:LIFI_CHAIN_ID`; copied here to
- * avoid a cross-module import. The two MUST stay in sync; tests pin
- * both via the LiFi public chain IDs.
- */
-const LIFI_CHAIN_ID: Record<SupportedChain | "solana" | "tron", number> = {
-  ethereum: 1,
-  arbitrum: 42161,
-  polygon: 137,
-  base: 8453,
-  optimism: 10,
-  solana: 1151111081099710,
-  tron: 728126428,
-};
 
 export interface PrepareTronLifiSwapParams {
   /** TRON base58 wallet — funds + signs. T-prefix, 34 chars. */
@@ -203,25 +188,7 @@ function verifyTronLifiBridgeIntent(
     );
   }
 
-  const expectedChainId = BigInt(LIFI_CHAIN_ID[p.toChain]);
-  if (decoded.destinationChainId !== expectedChainId) {
-    // Intermediate-chain bridges (NEAR Intents) legitimately encode a
-    // settlement-chain ID instead of the user's final destination.
-    // Source-code-constant allowlist — see
-    // `src/modules/swap/intermediate-chain-bridges.ts`. Issue #237.
-    if (!matchIntermediateChainBridge(decoded)) {
-      throw new Error(
-        `LiFi bridge calldata destinationChainId mismatch: encoded ` +
-          `${decoded.destinationChainId.toString()} but user requested toChain="${p.toChain}" ` +
-          `(= ${expectedChainId.toString()}). Refusing to sign.`,
-      );
-    }
-    // TRON-source same-chain (tron → tron) is excluded by the type
-    // system: `PrepareTronLifiSwapParams.toChain` is `SupportedChain |
-    // "solana"`. So the cross-chain invariant the EVM-source path
-    // re-asserts is enforced upstream here. Fall through to
-    // receiver-side checks below.
-  }
+  assertLifiDestinationChain(p.toChain, decoded.destinationChainId);
 
   if (p.toChain === "solana") {
     if (decoded.receiver.toLowerCase() !== NON_EVM_RECEIVER_SENTINEL) {

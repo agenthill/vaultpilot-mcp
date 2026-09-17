@@ -11,7 +11,7 @@ import {
   type DecodedLifiBridgeData,
 } from "../../signing/decode-calldata.js";
 import { NON_EVM_RECEIVER_SENTINEL } from "../../abis/lifi-diamond.js";
-import { matchIntermediateChainBridge } from "./intermediate-chain-bridges.js";
+import { assertLifiDestinationChain } from "./lifi-chain-ids.js";
 import {
   classifyLifiQuote,
   vetGenericSwapQuote,
@@ -25,27 +25,6 @@ import { mevExposureNote } from "./mev-hint.js";
 import { buildApprovalTx, chainApproval, resolveApprovalCap } from "../shared/approval.js";
 import { applyMinOut, applyMaxIn } from "../shared/slippage.js";
 import type { SupportedChain, UnsignedTx } from "../../types/index.js";
-
-/**
- * LiFi-internal numeric chain IDs for non-EVM destinations. Source: the
- * chain IDs returned by `https://li.quest/v1/chains` (also surfaced as
- * the `ChainId` enum in `@lifi/types`). Hardcoding here avoids a
- * cross-module import for what is, conceptually, a small lookup table
- * specific to bridge-intent verification.
- *
- * Same constants are duplicated in `decode-calldata.describeBridgeChainId` —
- * those tables stay in lockstep manually; the test
- * `swap-evm-to-solana.test.ts` pins both via the LiFi public chain ID.
- */
-const LIFI_CHAIN_ID: Record<SupportedChain | "solana" | "tron", number> = {
-  ethereum: 1,
-  arbitrum: 42161,
-  polygon: 137,
-  base: 8453,
-  optimism: 10,
-  solana: 1151111081099710,
-  tron: 728126428,
-};
 
 /**
  * Validate destination addressing for cross-chain-type bridges. The schema
@@ -198,42 +177,7 @@ function verifyLifiBridgeIntent(
     }
     return;
   }
-  const expectedChainId = BigInt(LIFI_CHAIN_ID[args.toChain as keyof typeof LIFI_CHAIN_ID]);
-  if (decoded.destinationChainId !== expectedChainId) {
-    // Some bridges legitimately encode an intermediate settlement chain
-    // ID (NEAR Intents being the canonical case for ETH→TRON USDT —
-    // funds settle on NEAR and are released on TRON off-chain by a
-    // relayer). The match must satisfy BOTH the bridge name AND the
-    // intermediate chain ID, both of which are hardcoded source-code
-    // constants in INTERMEDIATE_CHAIN_BRIDGES — no env / userConfig /
-    // LiFi-response input is consulted, so neither value is tamperable
-    // by a compromised MCP / hostile aggregator within our threat
-    // model. Issue #237.
-    const intermediate = matchIntermediateChainBridge(decoded);
-    if (!intermediate) {
-      throw new Error(
-        `LiFi bridge calldata destinationChainId mismatch: encoded ${decoded.destinationChainId.toString()} ` +
-          `but user requested toChain="${args.toChain}" (= ${expectedChainId.toString()}). ` +
-          `Refusing to return calldata — this would route funds to the wrong chain. Re-run get_swap_quote.`,
-      );
-    }
-    // Intermediate-chain bridges only make sense for cross-chain
-    // requests. On a same-chain request the user wanted no bridging at
-    // all, so a NEAR-Intents-shaped calldata represents wrong intent
-    // (the swap-facet path is what handles same-chain swaps; bridge
-    // facets shouldn't fire there).
-    if (args.fromChain === args.toChain) {
-      throw new Error(
-        `LiFi quote returned ${intermediate.description} calldata for a same-chain ` +
-          `request (${args.fromChain} → ${args.toChain}). Intermediate-chain bridges ` +
-          `are only valid for cross-chain routes; refusing to return calldata.`,
-      );
-    }
-    // Allowed: fall through to receiver-side checks below. The
-    // receiver MUST still be the non-EVM sentinel for non-EVM final
-    // destinations, since the actual destination address is in the
-    // bridge-specific facet data we do not decode.
-  }
+  assertLifiDestinationChain(args.toChain, decoded.destinationChainId);
 
   const toIsNonEvm = args.toChain === "solana" || args.toChain === "tron";
   if (toIsNonEvm) {

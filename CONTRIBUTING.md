@@ -19,6 +19,22 @@ Tracking issues (tagged for design discussion or roadmap follow-up, not work-rea
 
 The filter is on the bot pattern, not on new contributors. To contribute on a tracking issue, either open a small focused PR against an actual bug first (signal that you understand the codebase) or ask a specific clarifying question that shows you read the issue and the linked code — pick an open decision and propose a defensible answer.
 
+## Checking LiFi destination IDs
+
+After building, run `npm run verify:lifi-chain-ids` for the optional online
+check. It fetches and decodes live quotes for every destination in
+`src/modules/swap/lifi-chain-ids.ts`, checks each emitted bridge/chain-ID pair,
+and fails if a quote is unavailable or an accepted ID is not observed. Run it
+periodically and whenever changing the table; the normal unit suite is offline.
+It uses public test addresses and only fetches quotes.
+
+TRON uses `728126428` in LiFi API requests and `1885080386571452` in on-chain
+`BridgeData`. The latter is independently defined in
+[LiFiData.sol](https://github.com/lifinance/contracts/blob/8da9776d194b8e83894ea5746c059dfb8f0457f6/src/Helpers/LiFiData.sol).
+The destination gate compares against the user-requested chain for every bridge;
+bridge names cannot waive the comparison. The live probes include NEAR to
+Arbitrum and Symbiosis to TRON to check this distinction.
+
 ## Testing demo mode locally
 
 Demo mode runs the server without RPC keys, Ledger pairing, or a config file:
