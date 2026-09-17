@@ -14,6 +14,7 @@ import {
   markSolanaBroadcastAttempted,
   wasSolanaBroadcastAttempted,
   getSolanaBroadcastSignature,
+  getSolanaBroadcastAttemptForNonceAccount,
 } from "../../signing/solana-tx-store.js";
 import bs58 from "bs58";
 import { solanaPayloadFingerprint } from "../../signing/verification.js";
@@ -537,6 +538,31 @@ export async function previewSolanaSend(args: {
   // Verify the handle exists before hitting the RPC so we fail fast on stale
   // handles without burning a network call.
   const draft = getSolanaDraft(args.handle);
+
+  // Issue #797 — a fresh prepare creates a new random handle but, for all
+  // durable-nonce actions, reuses the wallet's deterministic nonce account.
+  // Carry the ambiguity marker at that nonce-account boundary so an
+  // abort-but-landed send cannot be turned into a second valid transfer by
+  // preparing a fresh handle. An unrelated wallet derives another nonce
+  // account and therefore remains unaffected.
+  const priorNonceAttempt = draft.meta.nonce
+    ? getSolanaBroadcastAttemptForNonceAccount(draft.meta.nonce.account)
+    : undefined;
+  if (priorNonceAttempt && priorNonceAttempt.handle !== args.handle) {
+    const nonce = draft.meta.nonce!;
+    throw new Error(
+      `Refusing to preview Solana handle '${args.handle}': a prior handle ` +
+        `'${priorNonceAttempt.handle}' already reached network broadcast using durable nonce ` +
+        `${nonce.account} and did not confirm success. That transaction MAY have LANDED — ` +
+        `a fresh handle would re-fetch the advanced nonce and create a SECOND, byte-different, ` +
+        `independently-valid transaction that could repeat the transfer. Do NOT re-prepare or ` +
+        `retry this wallet yet. FIRST resolve the original attempt by calling this tool ` +
+        `VERBATIM: get_transaction_status(chain='solana', txHash='${priorNonceAttempt.signature}', ` +
+        `durableNonce={ noncePubkey: '${nonce.account}', nonceValue: '${priorNonceAttempt.nonceValue}' }). ` +
+        `If it reports the transaction confirmed/landed, the original transfer is complete. If it ` +
+        `reports dropped, it is safe to prepare a new send. Issue #797.`,
+    );
+  }
 
   // Issue #788 — fail closed on re-pin after an AMBIGUOUS broadcast abort.
   // If a broadcast was already ATTEMPTED on this handle (send_transaction

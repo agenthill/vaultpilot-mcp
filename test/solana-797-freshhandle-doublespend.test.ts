@@ -33,12 +33,12 @@ import { Keypair, PublicKey } from "@solana/web3.js";
  * prepare → preview → send → prepare(FRESH) → preview flow with no
  * reference to any fix-internal symbol:
  *
- *   CASE 1 (REFUSE / fail-closed) — RED on current main.
+ *   CASE 1 (REFUSE / fail-closed).
  *     prepare A → preview A → send A (broadcast aborts, tx landed → nonce
  *     advances) → prepare a FRESH handle B for the IDENTICAL
  *     source→destination→amount → preview B. Must NOT silently return a
- *     fresh signable tx. RED today because #792's guard is per-handle and
- *     handle B was never touched by a broadcast attempt.
+ *     fresh signable tx; the nonce-account guard remembers handle A's
+ *     ambiguous broadcast across the new handle.
  *
  *   CASE 2 (OVER-BLOCK CONTROL) — GREEN now AND must stay GREEN after any
  *     reasonable #797 fix.
@@ -120,6 +120,11 @@ vi.mock("../src/modules/solana/nonce.js", async (importOriginal) => {
 });
 
 beforeEach(async () => {
+  const { __clearSolanaTxStore } = await import(
+    "../src/signing/solana-tx-store.js"
+  );
+  __clearSolanaTxStore();
+
   getAddressMock.mockReset();
   getAppConfigurationMock.mockReset();
   signTransactionMock.mockReset();
@@ -134,8 +139,8 @@ beforeEach(async () => {
   connectionStub.getRecentPrioritizationFees.mockResolvedValue([]);
   // Pre-sign simulation defaults to SUCCESS so it never becomes the reason a
   // preview refuses — the ONLY thing that should flip case 1 from resolve to
-  // refuse is a (absent-on-main) #797 fresh-handle guard. A sim failure here
-  // would make case 1 throw for the wrong reason and mask the RED.
+  // refuse is the #797 fresh-handle guard. A sim failure here would make case
+  // 1 throw for the wrong reason and mask the guard's behavior.
   connectionStub.simulateTransaction.mockResolvedValue({
     context: { slot: 1 },
     value: {
@@ -186,7 +191,7 @@ function isSignableTx(x: unknown): boolean {
 }
 
 describe("#797 Solana fresh-handle abort-but-landed double-execution regression", () => {
-  it("CASE 1 (REFUSE, RED — no fresh-handle guard yet): a FRESH prepare_solana_* handle for the SAME source→destination→amount as an abort-but-landed send must fail closed, not silently re-pin a signable duplicate", async () => {
+  it("CASE 1 (REFUSE): a FRESH prepare_solana_* handle for the SAME source→destination→amount as an abort-but-landed send must fail closed, not silently re-pin a signable duplicate", async () => {
     const { buildSolanaNativeSend } = await import(
       "../src/modules/solana/actions.js"
     );
@@ -244,9 +249,6 @@ describe("#797 Solana fresh-handle abort-but-landed double-execution regression"
     // 3. #797: mint a FRESH handle B — a brand-new `prepare_solana_*` call,
     //    NOT a re-preview of handle A — for the IDENTICAL
     //    source→destination→amount transfer that just aborted-but-landed.
-    //    #792's guard checks `wasSolanaBroadcastAttempted(args.handle)`
-    //    against handle B's OWN (unset) flag; it has no memory of handle A's
-    //    aborted attempt, so handle B sails through untouched.
     const draftB = await buildSolanaNativeSend({
       wallet: WALLET,
       to: RECIPIENT,
@@ -259,11 +261,8 @@ describe("#797 Solana fresh-handle abort-but-landed double-execution regression"
     //    back a second, byte-different, independently-valid signable tx that
     //    would repeat the 0.1 SOL transfer.
     //
-    //    RED on current main: previewSolanaSend has no memory of wallet A's
-    //    aborted attempt when asked about handle B, so it re-pins with V1
-    //    and RESOLVES to a fresh signable tx (the double-spend) —
-    //    `failedClosed` is false and this assertion fails, which is the
-    //    proof of the bug.
+    //    The nonce-account marker set for handle A must make this fresh handle
+    //    refuse before it can re-pin with V1.
     const outcomeB = await previewSolanaSend({ handle: draftB.handle }).then(
       (pinned) => ({ threw: false as const, pinned }),
       (err: unknown) => ({ threw: true as const, err }),
@@ -275,10 +274,8 @@ describe("#797 Solana fresh-handle abort-but-landed double-execution regression"
       failedClosed,
       "preview_solana_send on a FRESH handle for the same source/destination/amount must fail " +
         "closed after a prior abort-but-landed broadcast on this wallet's durable nonce: it must " +
-        "not silently hand back a second signable duplicate that re-spends the landed nonce. This " +
-        "is RED on current main — #792's guard is keyed on wasSolanaBroadcastAttempted(handle), a " +
-        "PER-HANDLE flag the fresh handle never carries, so this resolves to a fresh signable tx " +
-        "(the double-spend). Issue #797 (sibling of #788, closed by #792).",
+        "not silently hand back a second signable duplicate that re-spends the landed nonce. " +
+        "Issue #797's nonce-account guard must carry the ambiguous broadcast state across handles.",
     ).toBe(true);
   });
 

@@ -195,6 +195,24 @@ interface StoredSolanaTx {
 const store = new Map<string, StoredSolanaTx>();
 
 /**
+ * Durable-nonce broadcast attempts indexed independently of their original
+ * draft handle. A new prepare call creates a new handle but reuses the same
+ * deterministic nonce account for the wallet, so a per-handle marker alone
+ * cannot prevent an abort-but-landed transaction from being sent again.
+ */
+interface SolanaNonceBroadcastAttempt {
+  handle: string;
+  signature: string;
+  nonceValue: string;
+  expiresAt: number;
+}
+
+const broadcastAttemptsByNonceAccount = new Map<
+  string,
+  SolanaNonceBroadcastAttempt
+>();
+
+/**
  * Recursively `Object.freeze` `value` and every plain-object/array it
  * reaches, so a later mutation on the object `consumeSolanaHandle` hands
  * back throws instead of silently sticking. Sibling of `tx-store.ts`'s
@@ -235,6 +253,11 @@ function deepFreeze<T>(value: T): T {
 function prune(now = Date.now()): void {
   for (const [handle, entry] of store) {
     if (entry.expiresAt < now) store.delete(handle);
+  }
+  for (const [nonceAccount, attempt] of broadcastAttemptsByNonceAccount) {
+    if (attempt.expiresAt < now) {
+      broadcastAttemptsByNonceAccount.delete(nonceAccount);
+    }
   }
 }
 
@@ -422,7 +445,17 @@ export function consumeSolanaHandle(handle: string): UnsignedSolanaTx {
 }
 
 export function retireSolanaHandle(handle: string): void {
+  const nonceAccount = store.get(handle)?.draft.meta.nonce?.account;
   store.delete(handle);
+  // A successful broadcast is no longer ambiguous. Clear only this handle's
+  // marker so a newer attempted send using the same nonce account cannot be
+  // accidentally removed.
+  if (
+    nonceAccount &&
+    broadcastAttemptsByNonceAccount.get(nonceAccount)?.handle === handle
+  ) {
+    broadcastAttemptsByNonceAccount.delete(nonceAccount);
+  }
 }
 
 /**
@@ -445,7 +478,28 @@ export function markSolanaBroadcastAttempted(
   if (entry) {
     entry.broadcastAttempted = true;
     entry.signature = signature;
+    const nonce = entry.draft.meta.nonce;
+    if (nonce) {
+      broadcastAttemptsByNonceAccount.set(nonce.account, {
+        handle,
+        signature,
+        nonceValue: nonce.value,
+        expiresAt: entry.expiresAt,
+      });
+    }
   }
+}
+
+/**
+ * Return a still-ambiguous broadcast attempt for a durable nonce account.
+ * Issue #797: this survives a fresh prepare call, whose new random handle
+ * would otherwise bypass the original handle's broadcast-attempt marker.
+ */
+export function getSolanaBroadcastAttemptForNonceAccount(
+  nonceAccount: string,
+): SolanaNonceBroadcastAttempt | undefined {
+  prune();
+  return broadcastAttemptsByNonceAccount.get(nonceAccount);
 }
 
 /**
@@ -484,4 +538,10 @@ export function isSolanaHandlePinned(handle: string): boolean {
   prune();
   const entry = store.get(handle);
   return entry?.pinned != null;
+}
+
+/** Test-only isolation helper for the module-level transaction registry. */
+export function __clearSolanaTxStore(): void {
+  store.clear();
+  broadcastAttemptsByNonceAccount.clear();
 }
