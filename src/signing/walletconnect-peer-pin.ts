@@ -12,8 +12,8 @@ import type { SessionTypes } from "@walletconnect/types";
  * Ledger Live, because the user scanned the QR with Ledger Live and
  * approved on the Ledger device." The MCP can't verify the wallet
  * binary itself (P4 covers that), but it CAN verify the WC peer's
- * advertised identity matches what Ledger Live publishes — name,
- * canonical URL, icons hosted on `*.ledger.com`. A different wallet
+ * advertised identity matches what Ledger Live publishes — name and
+ * canonical URL. A different wallet
  * (Sparrow, MetaMask, an attacker's wallet) advertises different
  * metadata, and the user would notice the prompt on the wrong app
  * — but only if they look. This pin makes the discrepancy
@@ -33,13 +33,31 @@ import type { SessionTypes } from "@walletconnect/types";
  *     Ledger Live's exact metadata (impossible to detect at this
  *     layer alone; user's eyes on the device are the trust root)
  *
- * Pinning policy:
- *   - `name === "Ledger Live"` exact match (Ledger publishes this
- *     name; case-sensitive)
- *   - `url` matches `https://*.ledger.com/...` OR is empty (Ledger
- *     Live mobile sometimes omits the URL field)
- *   - At least one icon URL hostname matches `*.ledger.com` (defense
- *     against a peer that copies name+url but forgets the icon CDN)
+ * Pinning policy (re-scoped by issue #831 — real Ledger Live was
+ * failing 2 of the original 3 checks on every genuine pairing):
+ *   - `url` hostname is the load-bearing anchor: must be `ledger.com`
+ *     or a `*.ledger.com` subdomain. All three fields are equally
+ *     peer-self-reported — none is more spoof-resistant than another
+ *     — so this pin's real value is catching an ACCIDENTAL
+ *     wrong-wallet pairing (the user scanned the QR with the wrong
+ *     app), not a deliberate spoof (out of scope regardless, see
+ *     "What this misses" above). `url` is the one field that actually
+ *     identified the genuine peer in #831's observed metadata, so it
+ *     alone carries that job now. A narrow exception: an EMPTY url is
+ *     tolerated, but only when `name` is already allowlisted (see
+ *     below) — see the in-function comment for why.
+ *   - `name` is checked against a small allowlist of names Ledger
+ *     Live has been observed to publish (`"Ledger Live"`,
+ *     `"Ledger Wallet"`; exact match, case-sensitive) but is a
+ *     WARNING CONTRIBUTOR, not a sole trigger: an unrecognized name
+ *     still produces a `mismatch` verdict even when `url` is good
+ *     (metadata drift is worth surfacing), but the message names
+ *     exactly which field disagreed so the operator can judge.
+ *   - The icon-host check is REMOVED (issue #831). Real Ledger Live's
+ *     sole icon is served from `avatars.githubusercontent.com` — a
+ *     GitHub avatar URL Ledger doesn't control and could change any
+ *     time a GitHub org avatar changes. Pinning it added churn, not
+ *     identification, so it's dropped rather than allowlisted.
  *
  * On mismatch we WARN-LOUDLY rather than refuse. Refusal would brick
  * legitimate users running self-built Ledger Live or development
@@ -56,13 +74,20 @@ export interface PeerPinResult {
   reportedName: string;
   /** Peer's reported URL. Empty string if missing. */
   reportedUrl: string;
-  /** Peer's reported icon hostnames (parsed from URLs). */
-  reportedIconHosts: string[];
   /** Human-readable line for the agent to surface on `mismatch`. */
   message: string;
 }
 
-const LEDGER_LIVE_NAME_EXACT = "Ledger Live";
+/**
+ * Names observed as genuine Ledger Live WalletConnect metadata.
+ * Exact match, case-sensitive. `"Ledger Live"` is the name from the
+ * original #325 pin; `"Ledger Wallet"` was added by #831 after a real
+ * pairing showed current Ledger Live advertising that name instead.
+ */
+const LEDGER_LIVE_NAMES: ReadonlySet<string> = new Set([
+  "Ledger Live",
+  "Ledger Wallet",
+]);
 /** Hostname suffixes Ledger publishes from. */
 const LEDGER_HOST_SUFFIXES: ReadonlyArray<string> = [".ledger.com"];
 
@@ -88,81 +113,81 @@ function safeUrlHostname(raw: string): string | null {
  * pin. Returns a structured verdict; does NOT throw.
  */
 export function pinLedgerLivePeer(session: SessionTypes.Struct): PeerPinResult {
-  // SessionTypes.Struct.peer.metadata.{name, url, icons} are the
-  // standard WC v2 fields the wallet advertises.
+  // SessionTypes.Struct.peer.metadata.{name, url} are the standard
+  // WC v2 fields the wallet advertises. `icons` is no longer read —
+  // the icon-host check was dropped by #831 (see module doc).
   const metadata = session.peer?.metadata;
   const reportedName = metadata?.name ?? "";
   const reportedUrl = metadata?.url ?? "";
-  const reportedIcons = Array.isArray(metadata?.icons) ? metadata.icons : [];
-  const reportedIconHosts = reportedIcons
-    .map((u) => safeUrlHostname(u))
-    .filter((h): h is string => h !== null);
 
-  if (!reportedName && !reportedUrl && reportedIconHosts.length === 0) {
+  if (!reportedName && !reportedUrl) {
     return {
       verdict: "missing-metadata",
       reportedName,
       reportedUrl,
-      reportedIconHosts,
       message:
-        `WalletConnect peer reported no metadata (name + url + icons all empty). ` +
-        `This is unusual; legitimate Ledger Live always advertises name and url. ` +
+        `WalletConnect peer reported no metadata (name + url both empty). ` +
         `Verify the connection on-device before approving signing prompts — the ` +
         `MCP cannot identify the peer.`,
     };
   }
 
-  // Name check: exact match. Ledger Live publishes "Ledger Live"
-  // verbatim; alternates ("Ledger Live Mobile", "Ledger Live Desktop")
-  // are NOT in current production metadata, so any deviation is a
-  // pinning failure.
-  const nameOk = reportedName === LEDGER_LIVE_NAME_EXACT;
+  // Name check: small allowlist (issue #831). A warning contributor,
+  // not a sole trigger — see module doc.
+  const nameOk = LEDGER_LIVE_NAMES.has(reportedName);
 
-  // URL check: scheme can be omitted; hostname must match a Ledger
-  // suffix. Empty url is acceptable (some clients omit it on mobile).
+  // URL check: the load-bearing anchor (issue #831). A scheme-less
+  // url fails `new URL()` parsing (safeUrlHostname returns null), so
+  // it mismatches like any other unparseable/non-Ledger url — no
+  // special-casing needed for that.
+  //
+  // Empty url is tolerated, but ONLY when name is already allowlisted
+  // (re-narrowed per #831 review). The pre-#831 pin (afcf211) claimed
+  // "Ledger Live mobile sometimes omits url" with zero evidence cited; we can't verify or refute that
+  // claim here either. So the code stays safe under BOTH readings:
+  // if the claim is true, an unconditional url requirement would cry
+  // wolf on every mobile pairing — the exact #831 defect class; if
+  // it's false, tolerating empty url when the name is recognized
+  // buys an attacker nothing against this pin's actual threat model
+  // (accidental wrong-wallet pairing — a mis-scanned MetaMask isn't
+  // self-reported as "Ledger Wallet"), so gating the tolerance on
+  // `nameOk` closes that gap without reintroducing #831.
   const urlHost = safeUrlHostname(reportedUrl);
-  const urlOk = !reportedUrl || (urlHost !== null && hostMatchesLedger(urlHost));
+  const urlMatchesLedger = urlHost !== null && hostMatchesLedger(urlHost);
+  const urlOk = urlMatchesLedger || (!reportedUrl && nameOk);
 
-  // Icon check: at least one icon URL must point at a Ledger-hosted
-  // CDN. Acceptable to omit icons entirely — but if icons ARE present,
-  // at least one should be Ledger-hosted (catches peers that
-  // copy-paste name+url but forget the icon CDN).
-  const iconsOk =
-    reportedIconHosts.length === 0 ||
-    reportedIconHosts.some((h) => hostMatchesLedger(h));
-
-  if (nameOk && urlOk && iconsOk) {
+  if (nameOk && urlOk) {
     return {
       verdict: "match",
       reportedName,
       reportedUrl,
-      reportedIconHosts,
       message: `WalletConnect peer matches Ledger Live pin.`,
     };
   }
 
   const reasons: string[] = [];
   if (!nameOk) {
+    const expected = [...LEDGER_LIVE_NAMES].map((n) => `"${n}"`).join(", ");
     reasons.push(
-      `name "${reportedName}" ≠ expected "${LEDGER_LIVE_NAME_EXACT}"`,
+      `name "${reportedName}" is not a recognized Ledger Live name (expected one of: ${expected})`,
     );
   }
   if (!urlOk) {
-    reasons.push(
-      `url "${reportedUrl}" doesn't match a *.ledger.com hostname`,
-    );
-  }
-  if (!iconsOk) {
-    reasons.push(
-      `none of the icon hosts (${reportedIconHosts.join(", ")}) match *.ledger.com`,
-    );
+    if (!reportedUrl) {
+      reasons.push(
+        `url is empty, which is only tolerated when name is a recognized Ledger Live name`,
+      );
+    } else {
+      reasons.push(
+        `url "${reportedUrl}" doesn't match a ledger.com hostname`,
+      );
+    }
   }
 
   return {
     verdict: "mismatch",
     reportedName,
     reportedUrl,
-    reportedIconHosts,
     message:
       `WalletConnect peer does NOT match the Ledger Live pin: ${reasons.join("; ")}. ` +
       `If you intentionally connected via a non-Ledger-Live wallet (development ` +
