@@ -97,6 +97,11 @@ vi.mock("../src/modules/solana/nonce.js", async (importOriginal) => {
 });
 
 beforeEach(async () => {
+  const { __clearSolanaTxStore } = await import(
+    "../src/signing/solana-tx-store.js"
+  );
+  __clearSolanaTxStore();
+
   getAddressMock.mockReset();
   getAppConfigurationMock.mockReset();
   signTransactionMock.mockReset();
