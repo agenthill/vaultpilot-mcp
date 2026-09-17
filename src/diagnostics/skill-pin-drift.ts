@@ -53,7 +53,7 @@ import { createHash } from "node:crypto";
  * literal a second time.
  */
 export const EXPECTED_SKILL_SHA256 =
-  "d6c099cf0215c6162a1fd9555d8401f3489e8dd6d7f3853a82c4683fc443d7d6";
+  "7fbb1b5f40614ee5e63760fd023661fb36c7005d3d42ac7d3bef9230da7c9781";
 
 /**
  * Sentinel fragments. Assembled from three pieces so the full literal
