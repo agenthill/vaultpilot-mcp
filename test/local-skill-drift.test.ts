@@ -71,13 +71,13 @@ describe("checkLocalSkillDrift — issue #613 finding 3", () => {
     // v4 was the example version that triggered the original report.
     const stale = `# preflight skill v4
 ${EXPECTED_SKILL_SENTINEL_A}_v4_7655818578c7a044
-content body that does not match the canonical v16 hash`;
+content body that does not match the canonical v17 hash`;
     writeFixture(stale);
     const result = checkLocalSkillDrift();
     expect(result.status).toBe("version-stale");
     if (result.status === "version-stale") {
       expect(result.localVersion).toBe("4");
-      expect(result.pinnedVersion).toBe("16");
+      expect(result.pinnedVersion).toBe("17");
       expect(result.pinnedHash).toBe(EXPECTED_SKILL_SHA256);
       expect(result.localHash).not.toBe(EXPECTED_SKILL_SHA256);
     }
@@ -93,7 +93,7 @@ content body`;
     expect(result.status).toBe("version-stale");
     if (result.status === "version-stale") {
       expect(result.localVersion).toBe("99");
-      expect(result.pinnedVersion).toBe("16");
+      expect(result.pinnedVersion).toBe("17");
     }
   });
 
@@ -115,7 +115,7 @@ content`;
   });
 
   it("does NOT return `version-stale` when local sentinel happens to be the SAME version (still hash mismatch)", () => {
-    // Sentinel matches version (`v16`), but content body differs from
+    // Sentinel matches version (`v17`), but content body differs from
     // canonical → hash mismatch but version-extraction yields the same
     // version. Should fall through to content-mismatch (the version
     // marker says "same version" so something else is wrong).
@@ -136,7 +136,7 @@ body`);
     expect(first).not.toBeNull();
     expect(first).toContain("VAULTPILOT NOTICE — Local preflight skill is out of date (not tampered)");
     expect(first).toContain("`v4`");
-    expect(first).toContain("`v16`");
+    expect(first).toContain("`v17`");
     expect(first).toContain("git pull --ff-only");
     // Second call: deduped.
     expect(getLocalSkillDriftNotice()).toBeNull();
