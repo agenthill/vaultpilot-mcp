@@ -14,7 +14,7 @@ import { throwNonceRequired } from "./actions.js";
 import { kitInstructionsToLegacy } from "./kit-bridge.js";
 import { loadKaminoMainMarket } from "./kamino.js";
 import {
-  assertBuiltIxsBindReserve,
+  assertBuiltTxBindsReserve,
   pinReserveForMint,
   reservesForMint,
   selectReserve,
@@ -382,7 +382,7 @@ export async function buildKaminoSupply(
   // [computeBudget, setupIxs (ATA + refresh), lendingIx (deposit), cleanupIxs].
   const kitIxs = KaminoAction.actionToIxs(action);
   if (candidates.length > 1) {
-    assertBuiltIxsBindReserve(kitIxs, reserve, candidates, obligationState);
+    assertBuiltTxBindsReserve(action, kitIxs, reserve, candidates, obligationState);
   }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
@@ -574,7 +574,7 @@ export async function buildKaminoBorrow(
   );
   const kitIxs = KaminoAction.actionToIxs(action);
   if (c.candidates.length > 1) {
-    assertBuiltIxsBindReserve(kitIxs, c.reserve, c.candidates, c.obligationState);
+    assertBuiltTxBindsReserve(action, kitIxs, c.reserve, c.candidates, c.obligationState);
   }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
@@ -664,7 +664,7 @@ export async function buildKaminoWithdraw(
   );
   const kitIxs = KaminoAction.actionToIxs(action);
   if (c.candidates.length > 1) {
-    assertBuiltIxsBindReserve(kitIxs, c.reserve, c.candidates, c.obligationState);
+    assertBuiltTxBindsReserve(action, kitIxs, c.reserve, c.candidates, c.obligationState);
   }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
@@ -752,7 +752,7 @@ export async function buildKaminoRepay(
   );
   const kitIxs = KaminoAction.actionToIxs(action);
   if (c.candidates.length > 1) {
-    assertBuiltIxsBindReserve(kitIxs, c.reserve, c.candidates, c.obligationState);
+    assertBuiltTxBindsReserve(action, kitIxs, c.reserve, c.candidates, c.obligationState);
   }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 

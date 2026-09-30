@@ -16,7 +16,7 @@
  *   - supply / borrow add new liquidity: the reserve is the single ACTIVE
  *     (status 0) one (none or several → refuse).
  * The chosen reserve is pinned for the SDK by `pinReserveForMint`, and the built
- * instructions are checked to bind it by `assertBuiltIxsBindReserve`.
+ * instructions are checked to bind it by `assertBuiltTxBindsReserve`.
  */
 
 const RESERVE_STATUS_ACTIVE = 0;
@@ -128,18 +128,28 @@ export function pinReserveForMint<M extends KaminoMarketLike<KaminoReserveLike>>
 }
 
 /**
- * Check the SDK-built instructions bind `chosen`: it must appear among the
- * instruction accounts, and no other same-mint reserve may appear unless the
- * obligation holds a position in it (the SDK refreshes held reserves). Run
- * only when the mint has several reserves; throws on a mismatch so a pin the
- * SDK did not honor cannot reach signing.
+ * Check the SDK-built tx binds `chosen`. The SDK's action records the reserve
+ * it built the lending instruction from (`action.reserve`), which must be
+ * `chosen`; that holds even when the obligation's held reserves make other
+ * same-mint reserves legitimately appear in the instruction accounts. The
+ * instructions themselves must also carry `chosen` among their accounts, and
+ * no other same-mint reserve unless the obligation holds a position in it (the
+ * SDK refreshes held reserves). Run only when the mint has several reserves;
+ * throws on a mismatch so a pin the SDK did not honor cannot reach signing.
  */
-export function assertBuiltIxsBindReserve(
+export function assertBuiltTxBindsReserve(
+  action: { reserve?: { address: string } },
   ixs: ReadonlyArray<{ accounts?: ReadonlyArray<{ address: string }> }>,
   chosen: KaminoReserveLike,
   candidates: KaminoReserveLike[],
   obligation: KaminoObligationLike,
 ): void {
+  if (String(action.reserve?.address) !== chosen.address) {
+    throw new Error(
+      `The Kamino SDK built its lending instruction against reserve ${String(action.reserve?.address)}, ` +
+        `not the chosen reserve ${chosen.address}; refusing to return a tx built against a different reserve.`,
+    );
+  }
   const touched = new Set<string>();
   for (const ix of ixs) {
     for (const account of ix.accounts ?? []) touched.add(String(account.address));
