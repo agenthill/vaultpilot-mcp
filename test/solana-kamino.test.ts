@@ -54,30 +54,55 @@ vi.mock("../src/modules/solana/nonce.js", async (importOriginal) => {
   };
 });
 
-const fakeUsdcReserve = {
-  address: FAKE_USDC_RESERVE,
-  state: {
-    liquidity: { mintDecimals: 6n },
-    config: { status: 0 },
-  },
-  getTokenSymbol: () => "USDC",
-};
-const fakeSolReserve = {
-  address: FAKE_SOL_RESERVE,
-  state: {
-    liquidity: { mintDecimals: 9n },
-    config: { status: 0 },
-  },
-  getTokenSymbol: () => "SOL",
-};
+interface FakeReserve {
+  address: string;
+  state: { liquidity: { mintDecimals: bigint }; config: { status: number } };
+  getTokenSymbol: () => string;
+  getLiquidityMint: () => string;
+}
+
+function makeReserve(
+  address: string,
+  mint: string,
+  opts: { decimals?: bigint; symbol?: string; status?: number } = {},
+): FakeReserve {
+  return {
+    address,
+    state: {
+      liquidity: { mintDecimals: opts.decimals ?? 6n },
+      config: { status: opts.status ?? 0 },
+    },
+    getTokenSymbol: () => opts.symbol ?? "USDC",
+    getLiquidityMint: () => mint,
+  };
+}
+
+const fakeUsdcReserve = makeReserve(FAKE_USDC_RESERVE, USDC_MINT);
+const fakeSolReserve = makeReserve(FAKE_SOL_RESERVE, SOL_MINT, {
+  decimals: 9n,
+  symbol: "SOL",
+});
 
 const fakeMarket = {
   programId: FAKE_PROGRAM_ID,
   getAddress: () => FAKE_MARKET_ADDR,
   getUserMetadata: vi.fn(),
-  getReserveByMint: vi.fn(),
+  reserves: new Map<string, FakeReserve>(),
+  // Mirrors KaminoMarket.getReserveByMint: first match in `reserves` insertion
+  // order — the behavior the reserve pin relies on.
+  getReserveByMint(mint: string): FakeReserve | undefined {
+    for (const r of this.reserves.values()) {
+      if (r.getLiquidityMint() === mint) return r;
+    }
+    return undefined;
+  },
   getReserveByAddress: vi.fn(),
 };
+
+function setReserves(...reserves: FakeReserve[]): void {
+  fakeMarket.reserves.clear();
+  for (const r of reserves) fakeMarket.reserves.set(r.address, r);
+}
 
 vi.mock("../src/modules/solana/kamino.js", () => ({
   loadKaminoMainMarket: async () => fakeMarket,
@@ -165,11 +190,12 @@ async function setNoncePresent(): Promise<void> {
   await setNoncePresentFor(WALLET_KP.publicKey, FAKE_BLOCKHASH);
 }
 
-function fakeKitInstruction(label: string) {
+function fakeKitInstruction(label: string, extraAccounts: string[] = []) {
   return {
     programAddress: FAKE_KAMINO_PROGRAM.toBase58(),
     accounts: [
       { address: WALLET_KP.publicKey.toBase58(), role: 3 },
+      ...extraAccounts.map((address) => ({ address, role: 0 })),
     ],
     data: new Uint8Array([0xab, 0xcd, label.charCodeAt(0)]),
   };
@@ -214,7 +240,7 @@ function makeFakeObligation(opts: {
 
 beforeEach(async () => {
   fakeMarket.getUserMetadata.mockReset();
-  fakeMarket.getReserveByMint.mockReset();
+  fakeMarket.reserves.clear();
   fakeMarket.getReserveByAddress.mockReset();
   KaminoActionBuildBorrowTxnsMock.mockReset();
   KaminoActionBuildWithdrawTxnsMock.mockReset();
@@ -251,7 +277,7 @@ describe("buildKaminoBorrow", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue(fakeUsdcReserve);
+    setReserves(fakeUsdcReserve);
     KaminoObligationLoadMock.mockResolvedValue(makeFakeObligation({
       deposits: [{ reserveAddress: FAKE_SOL_RESERVE, mintAddress: SOL_MINT, amount: "100000000000", valueUsd: "1500" }],
     }));
@@ -285,7 +311,7 @@ describe("buildKaminoBorrow", () => {
   it("refuses when userMetadata is missing", async () => {
     await setNoncePresent();
     fakeMarket.getUserMetadata.mockResolvedValue([FAKE_USER_METADATA_ADDR, null]);
-    fakeMarket.getReserveByMint.mockReturnValue(fakeUsdcReserve);
+    setReserves(fakeUsdcReserve);
 
     const { buildKaminoBorrow } = await import(
       "../src/modules/solana/kamino-actions.js"
@@ -303,7 +329,7 @@ describe("buildKaminoWithdraw", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue(fakeUsdcReserve);
+    setReserves(fakeUsdcReserve);
     KaminoObligationLoadMock.mockResolvedValue(makeFakeObligation({
       deposits: [{ reserveAddress: FAKE_USDC_RESERVE, mintAddress: USDC_MINT, amount: "100000000", valueUsd: "100" }],
     }));
@@ -328,7 +354,7 @@ describe("buildKaminoWithdraw", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue(fakeUsdcReserve);
+    setReserves(fakeUsdcReserve);
     KaminoObligationLoadMock.mockResolvedValue(makeFakeObligation({
       // No USDC deposit; only SOL.
       deposits: [{ reserveAddress: FAKE_SOL_RESERVE, mintAddress: SOL_MINT, amount: "1000000000", valueUsd: "150" }],
@@ -350,7 +376,7 @@ describe("buildKaminoRepay", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue(fakeUsdcReserve);
+    setReserves(fakeUsdcReserve);
     KaminoObligationLoadMock.mockResolvedValue(makeFakeObligation({
       borrows: [{ reserveAddress: FAKE_USDC_RESERVE, mintAddress: USDC_MINT, amount: "50000000", valueUsd: "50" }],
     }));
@@ -382,7 +408,7 @@ describe("buildKaminoRepay", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue(fakeUsdcReserve);
+    setReserves(fakeUsdcReserve);
     KaminoObligationLoadMock.mockResolvedValue(makeFakeObligation({}));
 
     const { buildKaminoRepay } = await import(
@@ -667,11 +693,7 @@ describe("buildKaminoSupply — happy path", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue({
-      address: FAKE_RESERVE_ADDR,
-      state: { liquidity: { mintDecimals: 6n } },
-      getTokenSymbol: () => "USDC",
-    });
+    setReserves(makeReserve(FAKE_RESERVE_ADDR, USDC_MINT));
     KaminoObligationLoadMock.mockResolvedValue({ obligationAddress: FAKE_OBLIGATION_ADDR });
     const fakeAction = { __isFakeKaminoAction: true };
     KaminoActionBuildDepositTxnsMock.mockResolvedValue(fakeAction);
@@ -742,11 +764,7 @@ describe("buildKaminoSupply — rejection paths", () => {
   it("refuses when userMetadata is missing (user hasn't init'd)", async () => {
     await setNoncePresent();
     fakeMarket.getUserMetadata.mockResolvedValue([FAKE_USER_METADATA_ADDR, null]);
-    fakeMarket.getReserveByMint.mockReturnValue({
-      address: FAKE_RESERVE_ADDR,
-      state: { liquidity: { mintDecimals: 6n } },
-      getTokenSymbol: () => "USDC",
-    });
+    setReserves(makeReserve(FAKE_RESERVE_ADDR, USDC_MINT));
 
     const { buildKaminoSupply } = await import(
       "../src/modules/solana/kamino-actions.js"
@@ -762,11 +780,7 @@ describe("buildKaminoSupply — rejection paths", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue({
-      address: FAKE_RESERVE_ADDR,
-      state: { liquidity: { mintDecimals: 6n } },
-      getTokenSymbol: () => "USDC",
-    });
+    setReserves(makeReserve(FAKE_RESERVE_ADDR, USDC_MINT));
     KaminoObligationLoadMock.mockResolvedValue(null);
 
     const { buildKaminoSupply } = await import(
@@ -783,7 +797,7 @@ describe("buildKaminoSupply — rejection paths", () => {
       FAKE_USER_METADATA_ADDR,
       { userLookupTable: FAKE_USER_LUT_ADDR },
     ]);
-    fakeMarket.getReserveByMint.mockReturnValue(undefined);
+    setReserves();
 
     const { buildKaminoSupply } = await import(
       "../src/modules/solana/kamino-actions.js"
@@ -795,11 +809,7 @@ describe("buildKaminoSupply — rejection paths", () => {
 
   it("rejects bad amounts", async () => {
     await setNoncePresent();
-    fakeMarket.getReserveByMint.mockReturnValue({
-      address: FAKE_RESERVE_ADDR,
-      state: { liquidity: { mintDecimals: 6n } },
-      getTokenSymbol: () => "USDC",
-    });
+    setReserves(makeReserve(FAKE_RESERVE_ADDR, USDC_MINT));
 
     const { buildKaminoSupply } = await import(
       "../src/modules/solana/kamino-actions.js"
@@ -864,5 +874,197 @@ describe("renderSolanaAgentTaskBlock — kamino actions (init/supply)", () => {
     expect(block).toContain("BLIND-SIGN");
     expect(block).toContain("PAIR-CONSISTENCY LEDGER HASH");
     expect(block).toContain("Kamino supply");
+  });
+});
+
+describe("reserve selection — a mint listed as several reserves", () => {
+  // Mirrors the mainnet Kamino main market for USDC: the hidden (status 2)
+  // near-empty reserves enumerate before the active one, so an unpinned
+  // KaminoMarket.getReserveByMint(USDC) returns a hidden reserve.
+  const HIDDEN_A = Keypair.generate().publicKey.toBase58();
+  const HIDDEN_B = Keypair.generate().publicKey.toBase58();
+  const ACTIVE = Keypair.generate().publicKey.toBase58();
+  const ACTIVE_2 = Keypair.generate().publicKey.toBase58();
+  const MAINNET_SHAPE: [string, number][] = [[HIDDEN_A, 2], [HIDDEN_B, 2], [ACTIVE, 0]];
+
+  type Action = "supply" | "borrow" | "withdraw" | "repay";
+  interface Scenario {
+    name: string;
+    action: Action;
+    reserves: [address: string, status: number][];
+    deposits?: string[];
+    borrows?: string[];
+    /** Also give the obligation a SOL deposit (a position in a reserve of another mint). */
+    otherMintDeposit?: boolean;
+    expectReserve?: string;
+    expectError?: RegExp;
+  }
+
+  const scenarios: Scenario[] = [
+    { name: "withdraw takes the reserve holding the deposit (active, listed after hidden)", action: "withdraw", reserves: MAINNET_SHAPE, deposits: [ACTIVE], expectReserve: ACTIVE },
+    { name: "withdraw can exit a deposit held in a hidden reserve", action: "withdraw", reserves: MAINNET_SHAPE, deposits: [HIDDEN_B], expectReserve: HIDDEN_B },
+    { name: "withdraw refuses when no reserve of the mint holds a deposit", action: "withdraw", reserves: MAINNET_SHAPE, expectError: /no Kamino deposit in any reserve.*Nothing to withdraw/ },
+    { name: "withdraw refuses when deposits sit in two reserves of the mint", action: "withdraw", reserves: MAINNET_SHAPE, deposits: [HIDDEN_A, ACTIVE], expectError: /holds a deposit in 2 of them.*ambiguous/ },
+    { name: "withdraw ignores positions held in reserves of other mints", action: "withdraw", reserves: MAINNET_SHAPE, otherMintDeposit: true, expectError: /no Kamino deposit in any reserve.*Nothing to withdraw/ },
+    { name: "repay takes the reserve the obligation owes in", action: "repay", reserves: MAINNET_SHAPE, borrows: [ACTIVE], expectReserve: ACTIVE },
+    { name: "repay can clear debt held in a hidden reserve", action: "repay", reserves: MAINNET_SHAPE, borrows: [HIDDEN_A], expectReserve: HIDDEN_A },
+    { name: "repay refuses when no reserve of the mint has debt", action: "repay", reserves: MAINNET_SHAPE, expectError: /no Kamino debt in any reserve.*Nothing to repay/ },
+    { name: "repay refuses when debt sits in two reserves of the mint", action: "repay", reserves: MAINNET_SHAPE, borrows: [HIDDEN_A, ACTIVE], expectError: /holds a debt in 2 of them.*ambiguous/ },
+    { name: "repay ignores positions held in reserves of other mints", action: "repay", reserves: MAINNET_SHAPE, otherMintDeposit: true, expectError: /no Kamino debt in any reserve.*Nothing to repay/ },
+    { name: "supply takes the single active reserve, not the first listed", action: "supply", reserves: MAINNET_SHAPE, expectReserve: ACTIVE },
+    { name: "supply refuses when every reserve of the mint is hidden", action: "supply", reserves: [[HIDDEN_A, 2], [HIDDEN_B, 2]], expectError: /None is active.*ambiguous/ },
+    { name: "supply refuses when two reserves of the mint are active", action: "supply", reserves: [[HIDDEN_A, 2], [ACTIVE, 0], [ACTIVE_2, 0]], expectError: /2 are active.*ambiguous/ },
+    { name: "borrow takes the single active reserve, not the first listed", action: "borrow", reserves: MAINNET_SHAPE, expectReserve: ACTIVE },
+    { name: "borrow is not steered by collateral held in a hidden reserve", action: "borrow", reserves: MAINNET_SHAPE, deposits: [HIDDEN_A], expectReserve: ACTIVE },
+    { name: "supply still takes the active reserve when the obligation also holds the hidden one", action: "supply", reserves: MAINNET_SHAPE, deposits: [HIDDEN_A, ACTIVE], expectReserve: ACTIVE },
+    { name: "borrow still takes the active reserve when the obligation owes in the hidden one too", action: "borrow", reserves: MAINNET_SHAPE, borrows: [HIDDEN_B, ACTIVE], expectReserve: ACTIVE },
+  ];
+
+  /**
+   * Stand-in for the SDK: the action records the reserve it resolved via
+   * market.getReserveByMint (as KaminoAction.initialize does), and the
+   * instructions carry that reserve plus a refresh of every reserve the
+   * obligation holds (as the real refresh instructions do).
+   */
+  function simulateSdk(heldReserves: string[] = []): void {
+    const build = async (market: typeof fakeMarket) => ({
+      market,
+      reserve: market.getReserveByMint(USDC_MINT),
+    });
+    KaminoActionBuildDepositTxnsMock.mockImplementation(build);
+    KaminoActionBuildBorrowTxnsMock.mockImplementation(build);
+    KaminoActionBuildWithdrawTxnsMock.mockImplementation(build);
+    KaminoActionBuildRepayTxnsMock.mockImplementation(build);
+    KaminoActionActionToIxsMock.mockImplementation((a: { reserve: FakeReserve }) => [
+      fakeKitInstruction("R", heldReserves),
+      fakeKitInstruction("L", [a.reserve.address]),
+    ]);
+  }
+
+  async function setup(sc: Scenario): Promise<void> {
+    await setNoncePresent();
+    fakeMarket.getUserMetadata.mockResolvedValue([
+      FAKE_USER_METADATA_ADDR,
+      { userLookupTable: FAKE_USER_LUT_ADDR },
+    ]);
+    setReserves(...sc.reserves.map(([address, status]) => makeReserve(address, USDC_MINT, { status })));
+    const position = (reserveAddress: string) => ({
+      reserveAddress,
+      mintAddress: USDC_MINT,
+      amount: "100000000",
+      valueUsd: "100",
+    });
+    const solDeposit = {
+      reserveAddress: FAKE_SOL_RESERVE,
+      mintAddress: SOL_MINT,
+      amount: "1000000000",
+      valueUsd: "150",
+    };
+    KaminoObligationLoadMock.mockResolvedValue(makeFakeObligation({
+      deposits: [...(sc.deposits ?? []).map(position), ...(sc.otherMintDeposit ? [solDeposit] : [])],
+      borrows: (sc.borrows ?? []).map(position),
+    }));
+    simulateSdk([...(sc.deposits ?? []), ...(sc.borrows ?? [])]);
+  }
+
+  async function build(action: Action, amount = "10") {
+    const m = await import("../src/modules/solana/kamino-actions.js");
+    const fn = {
+      supply: m.buildKaminoSupply,
+      borrow: m.buildKaminoBorrow,
+      withdraw: m.buildKaminoWithdraw,
+      repay: m.buildKaminoRepay,
+    }[action];
+    return fn({ wallet: WALLET, mint: USDC_MINT, amount });
+  }
+
+  it.each(scenarios)("$name", async (sc) => {
+    await setup(sc);
+    const listedBefore = [...fakeMarket.reserves.keys()];
+    if (sc.expectError) {
+      await expect(build(sc.action)).rejects.toThrow(sc.expectError);
+      return;
+    }
+    const tx = await build(sc.action);
+    expect(tx.decoded.args.reserve).toBe(sc.expectReserve);
+    // The bytes bind the chosen reserve, not whichever the SDK lists first.
+    const { getSolanaDraft } = await import("../src/signing/solana-tx-store.js");
+    const draft = getSolanaDraft(tx.handle);
+    if (draft.kind !== "v0") throw new Error("unreachable");
+    const keys = draft.instructions.flatMap((ix) => ix.keys.map((k) => k.pubkey.toBase58()));
+    expect(keys).toContain(sc.expectReserve);
+    // Pinning is a view; the loaded market's own enumeration is untouched.
+    expect([...fakeMarket.reserves.keys()]).toEqual(listedBefore);
+  });
+
+  // Errors that predate selection keep their precedence on a multi-reserve mint:
+  // here every reserve is hidden, so selection would refuse if it ran first.
+  describe("pre-existing refusals still win over selection", () => {
+    const allHidden: Scenario = { name: "", action: "supply", reserves: [[HIDDEN_A, 2], [HIDDEN_B, 2]] };
+    const actions: Action[] = ["supply", "borrow", "withdraw", "repay"];
+
+    it.each(actions)("%s: invalid amount", async (action) => {
+      await setup({ ...allHidden, action });
+      await expect(build(action, "0")).rejects.toThrow(/Invalid amount/);
+    });
+
+    it.each(actions)("%s: missing userMetadata", async (action) => {
+      await setup({ ...allHidden, action });
+      fakeMarket.getUserMetadata.mockResolvedValue([FAKE_USER_METADATA_ADDR, null]);
+      await expect(build(action)).rejects.toThrow(/no Kamino userMetadata/);
+    });
+
+    it.each(actions)("%s: missing obligation", async (action) => {
+      await setup({ ...allHidden, action });
+      KaminoObligationLoadMock.mockResolvedValue(null);
+      await expect(build(action)).rejects.toThrow(/no Kamino obligation/);
+    });
+  });
+
+  describe("built-instruction guard", () => {
+    async function withdrawBuiltWith(ixAccounts: string[]) {
+      const sc: Scenario = { name: "", action: "withdraw", reserves: MAINNET_SHAPE, deposits: [ACTIVE] };
+      await setup(sc);
+      KaminoActionActionToIxsMock.mockReset();
+      KaminoActionActionToIxsMock.mockReturnValue([fakeKitInstruction("L", ixAccounts)]);
+      return build("withdraw");
+    }
+
+    it("refuses when the built instructions omit the chosen reserve", async () => {
+      await expect(withdrawBuiltWith([HIDDEN_A])).rejects.toThrow(
+        /do not reference the chosen reserve/,
+      );
+    });
+
+    it("refuses when the built instructions also touch a same-mint reserve the obligation does not hold", async () => {
+      await expect(withdrawBuiltWith([ACTIVE, HIDDEN_A])).rejects.toThrow(
+        /reference reserve .* for the same mint/,
+      );
+    });
+
+    it("accepts a same-mint reserve the obligation holds (the SDK refreshes held reserves)", async () => {
+      const sc: Scenario = { name: "", action: "supply", reserves: MAINNET_SHAPE, deposits: [HIDDEN_A] };
+      await setup(sc);
+      KaminoActionActionToIxsMock.mockReset();
+      KaminoActionActionToIxsMock.mockReturnValue([fakeKitInstruction("L", [ACTIVE, HIDDEN_A])]);
+      const tx = await build("supply");
+      expect(tx.decoded.args.reserve).toBe(ACTIVE);
+    });
+
+    it("refuses when the SDK's action targets another reserve, even though the chosen one is refreshed (both held)", async () => {
+      const sc: Scenario = { name: "", action: "supply", reserves: MAINNET_SHAPE, deposits: [HIDDEN_A, ACTIVE] };
+      await setup(sc);
+      // A pin the SDK did not honor: the lending reserve is HIDDEN_A, and ACTIVE
+      // appears in the instructions only as a refreshed held reserve.
+      KaminoActionBuildDepositTxnsMock.mockImplementation(async (market: typeof fakeMarket) => ({
+        market,
+        reserve: market.reserves.get(HIDDEN_A),
+      }));
+      KaminoActionActionToIxsMock.mockReset();
+      KaminoActionActionToIxsMock.mockReturnValue([fakeKitInstruction("L", [ACTIVE, HIDDEN_A])]);
+      await expect(build("supply")).rejects.toThrow(
+        /built its lending instruction against reserve .* not the chosen reserve/,
+      );
+    });
   });
 });

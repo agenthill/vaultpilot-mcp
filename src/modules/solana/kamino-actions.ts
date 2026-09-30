@@ -14,6 +14,14 @@ import { throwNonceRequired } from "./actions.js";
 import { kitInstructionsToLegacy } from "./kit-bridge.js";
 import { loadKaminoMainMarket } from "./kamino.js";
 import {
+  assertBuiltTxBindsReserve,
+  pinReserveForMint,
+  reservesForMint,
+  selectReserve,
+  type KaminoReserveLike,
+  type ReserveIntent,
+} from "./kamino-reserve.js";
+import {
   issueSolanaDraftHandle,
   type SolanaTxDraft,
 } from "../../signing/solana-tx-store.js";
@@ -318,16 +326,17 @@ export async function buildKaminoSupply(
   const owner = createNoopSigner(ownerAddr);
   const mintAddr = toAddress(p.mint);
 
-  // Resolve the reserve for this mint to learn its decimals and confirm
+  // Look up the reserves for this mint to learn its decimals and confirm
   // Kamino actually lists it. Failing fast here beats a confusing SDK
   // error from buildDepositTxns when the mint isn't in the market.
-  const reserve = market.getReserveByMint(mintAddr);
-  if (!reserve) {
+  const candidates = reservesForMint(market, p.mint);
+  if (candidates.length === 0) {
     throw new Error(
       `Mint ${p.mint} is not listed on Kamino's main market. Confirm via the Kamino app's reserve list.`,
     );
   }
-  const decimals = reserve.state.liquidity.mintDecimals;
+  // Every reserve of a mint shares the mint's decimals.
+  const decimals = candidates[0].state.liquidity.mintDecimals;
   const amountBaseUnits = tokenBaseUnits(p.amount, Number(decimals));
 
   // Refuse missing init.
@@ -350,8 +359,11 @@ export async function buildKaminoSupply(
     );
   }
 
+  const reserve = selectReserve(candidates, p.mint, { kind: "new-liquidity" });
+  const sdkMarket = candidates.length > 1 ? pinReserveForMint(market, reserve) : market;
+
   const action = await KaminoAction.buildDepositTxns(
-    market,
+    sdkMarket,
     amountBaseUnits.toString(),
     mintAddr,
     owner,
@@ -369,6 +381,9 @@ export async function buildKaminoSupply(
   // KaminoAction.actionToIxs returns the flat ix list:
   // [computeBudget, setupIxs (ATA + refresh), lendingIx (deposit), cleanupIxs].
   const kitIxs = KaminoAction.actionToIxs(action);
+  if (candidates.length > 1) {
+    assertBuiltTxBindsReserve(action, kitIxs, reserve, candidates, obligationState);
+  }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
   const symbol = reserve.getTokenSymbol() ?? p.mint.slice(0, 6);
@@ -414,12 +429,21 @@ export async function buildKaminoSupply(
  * mint, fetch the obligation, refuse if userMetadata or obligation are
  * missing. Returns everything the three write builders need to call the
  * matching `KaminoAction.build*Txns`.
+ *
+ * `side` says how the action picks among a mint's reserves when the market
+ * lists several (see kamino-reserve.ts): "new-liquidity" (borrow) takes the
+ * single active reserve; "deposits" (withdraw) / "borrows" (repay) take the
+ * reserve the obligation holds a deposit / borrow in. The returned `market`
+ * is pinned to that reserve, so pass it (not a freshly loaded one) to the SDK.
  */
-async function loadKaminoSupplyContext(p: {
-  wallet: string;
-  mint: string;
-  amount: string;
-}): Promise<{
+async function loadKaminoSupplyContext(
+  p: {
+    wallet: string;
+    mint: string;
+    amount: string;
+  },
+  side: "new-liquidity" | "deposits" | "borrows",
+): Promise<{
   ctx: NonceContext;
   // Cast to `any` because the kit-typed SDK objects flow through this
   // module without our local types layering on top — the SDK's
@@ -435,6 +459,8 @@ async function loadKaminoSupplyContext(p: {
   mintAddr: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   reserve: any;
+  /** Every reserve the market lists for the mint (length > 1 → `market` is pinned). */
+  candidates: KaminoReserveLike[];
   symbol: string;
   decimals: number;
   amountBaseUnits: bigint;
@@ -456,15 +482,15 @@ async function loadKaminoSupplyContext(p: {
   const owner = createNoopSigner(ownerAddr);
   const mintAddr = toAddress(p.mint);
 
-  const reserve = market.getReserveByMint(mintAddr);
-  if (!reserve) {
+  const candidates = reservesForMint(market, p.mint);
+  if (candidates.length === 0) {
     throw new Error(
       `Mint ${p.mint} is not listed on Kamino's main market. Confirm via the Kamino app's reserve list.`,
     );
   }
-  const decimals = Number(reserve.state.liquidity.mintDecimals);
+  // Every reserve of a mint shares the mint's decimals.
+  const decimals = Number(candidates[0].state.liquidity.mintDecimals);
   const amountBaseUnits = tokenBaseUnits(p.amount, decimals);
-  const symbol = reserve.getTokenSymbol() ?? p.mint.slice(0, 6);
 
   const [, userMetadataState] = await market.getUserMetadata(ownerAddr);
   if (userMetadataState === null) {
@@ -483,13 +509,21 @@ async function loadKaminoSupplyContext(p: {
     );
   }
 
+  const intent: ReserveIntent =
+    side === "new-liquidity"
+      ? { kind: "new-liquidity" }
+      : { kind: "existing-position", side, obligation: obligationState, wallet: p.wallet };
+  const reserve = selectReserve(candidates, p.mint, intent);
+  const symbol = reserve.getTokenSymbol() ?? p.mint.slice(0, 6);
+
   return {
     ctx,
-    market,
+    market: candidates.length > 1 ? pinReserveForMint(market, reserve) : market,
     owner,
     ownerAddr,
     mintAddr,
     reserve,
+    candidates,
     symbol,
     decimals,
     amountBaseUnits,
@@ -519,7 +553,7 @@ export interface PrepareKaminoBorrowParams {
 export async function buildKaminoBorrow(
   p: PrepareKaminoBorrowParams,
 ): Promise<PreparedKaminoTx> {
-  const c = await loadKaminoSupplyContext(p);
+  const c = await loadKaminoSupplyContext(p, "new-liquidity");
   const { KaminoAction } = await import("@kamino-finance/klend-sdk");
   const { none } = await import("@solana/kit");
 
@@ -539,6 +573,9 @@ export async function buildKaminoBorrow(
     0n,
   );
   const kitIxs = KaminoAction.actionToIxs(action);
+  if (c.candidates.length > 1) {
+    assertBuiltTxBindsReserve(action, kitIxs, c.reserve, c.candidates, c.obligationState);
+  }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
   const description = `Kamino borrow: ${p.amount} ${c.symbol} from reserve ${c.reserve.address.toString()}`;
@@ -595,7 +632,7 @@ export interface PrepareKaminoWithdrawParams {
 export async function buildKaminoWithdraw(
   p: PrepareKaminoWithdrawParams,
 ): Promise<PreparedKaminoTx> {
-  const c = await loadKaminoSupplyContext(p);
+  const c = await loadKaminoSupplyContext(p, "deposits");
   const { KaminoAction } = await import("@kamino-finance/klend-sdk");
   const { none } = await import("@solana/kit");
 
@@ -626,6 +663,9 @@ export async function buildKaminoWithdraw(
     0n,
   );
   const kitIxs = KaminoAction.actionToIxs(action);
+  if (c.candidates.length > 1) {
+    assertBuiltTxBindsReserve(action, kitIxs, c.reserve, c.candidates, c.obligationState);
+  }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
   const description = `Kamino withdraw: ${p.amount} ${c.symbol} from reserve ${c.reserve.address.toString()}`;
@@ -682,7 +722,7 @@ export interface PrepareKaminoRepayParams {
 export async function buildKaminoRepay(
   p: PrepareKaminoRepayParams,
 ): Promise<PreparedKaminoTx> {
-  const c = await loadKaminoSupplyContext(p);
+  const c = await loadKaminoSupplyContext(p, "borrows");
   const { KaminoAction } = await import("@kamino-finance/klend-sdk");
   const { none } = await import("@solana/kit");
 
@@ -711,6 +751,9 @@ export async function buildKaminoRepay(
     none(),
   );
   const kitIxs = KaminoAction.actionToIxs(action);
+  if (c.candidates.length > 1) {
+    assertBuiltTxBindsReserve(action, kitIxs, c.reserve, c.candidates, c.obligationState);
+  }
   const actionIxs = kitInstructionsToLegacy(kitIxs);
 
   const description = `Kamino repay: ${p.amount} ${c.symbol} → reserve ${c.reserve.address.toString()}`;
